@@ -3,7 +3,7 @@ import sys
 import copy
 import os
 import random
-import math 
+
 from cards.pawntastic import get_pawntastic_moves
 from cards.bishock import get_bishock_destroyed_squares
 from cards.rookdemon import get_rookdemon_path
@@ -25,13 +25,28 @@ pygame.display.set_caption("Chess Power-Up Cards")
 SCREEN_WIDTH, SCREEN_HEIGHT = screen.get_size()
 clock = pygame.time.Clock()
 
-BOTTOM_PANEL_HEIGHT = 255
-INFO_HEIGHT = 34
-BOARD_SIZE = min(SCREEN_WIDTH, SCREEN_HEIGHT - BOTTOM_PANEL_HEIGHT)
+# Side-card layout:
+# piece power cards on the left, general/game cards on the right.
+INFO_HEIGHT = 112
+SIDE_MARGIN = 14
+
+LEFT_PANEL_WIDTH = max(220, min(300, SCREEN_WIDTH // 6))
+RIGHT_PANEL_WIDTH = max(430, min(560, SCREEN_WIDTH // 3))
+
+BOARD_AREA_WIDTH = SCREEN_WIDTH - LEFT_PANEL_WIDTH - RIGHT_PANEL_WIDTH - SIDE_MARGIN * 2
+BOARD_AREA_HEIGHT = SCREEN_HEIGHT - INFO_HEIGHT - SIDE_MARGIN * 2
+
+BOARD_SIZE = min(BOARD_AREA_WIDTH, BOARD_AREA_HEIGHT)
 SQUARE_SIZE = BOARD_SIZE // ROWS
 BOARD_SIZE = SQUARE_SIZE * ROWS
-BOARD_X = (SCREEN_WIDTH - BOARD_SIZE) // 2
-BOARD_Y = 0
+
+BOARD_X = LEFT_PANEL_WIDTH + SIDE_MARGIN + max(0, (BOARD_AREA_WIDTH - BOARD_SIZE) // 2)
+BOARD_Y = SIDE_MARGIN + max(0, (BOARD_AREA_HEIGHT - BOARD_SIZE) // 2)
+
+LEFT_PANEL_X = 0
+RIGHT_PANEL_X = SCREEN_WIDTH - RIGHT_PANEL_WIDTH
+INFO_Y = SCREEN_HEIGHT - INFO_HEIGHT
+
 WIDTH = SCREEN_WIDTH
 HEIGHT = SCREEN_HEIGHT
 
@@ -69,7 +84,7 @@ animations = []
 
 font = pygame.font.SysFont("dejavusans", int(SQUARE_SIZE * 0.82))
 small_font = pygame.font.SysFont("dejavusans", 21)
-tiny_font = pygame.font.SysFont("dejavusans", 16)
+tiny_font = pygame.font.SysFont("dejavusans", max(16, int(SQUARE_SIZE * 0.20)))
 
 # -----------------------------
 # Card images
@@ -97,10 +112,49 @@ CARD_NAMES = [
     "inzone",
 ]
 
-CARD_GAP = max(8, SCREEN_WIDTH // 120)
-CARD_WIDTH = min(112, max(58, (SCREEN_WIDTH - 90 - CARD_GAP * (len(CARD_NAMES) - 1)) // len(CARD_NAMES)))
+PIECE_POWER_CARDS = [
+    "pawntastic",
+    "bishock",
+    "rookdemon",
+    "windknight",
+    "queentum",
+    "longlivetheking",
+]
+
+GENERAL_CARDS = [
+    "switchero",
+    "prophecy",
+    "meterstrike",
+    "thedramatic",
+    "capitalism",
+    "plague",
+    "solo",
+    "absoluteprotection",
+    "timetraveler",
+    "extrablood",
+    "chrisma",
+    "inzone",
+]
+
+CARD_GAP = max(8, SCREEN_HEIGHT // 95)
+MAX_ROWS = max(len(PIECE_POWER_CARDS), (len(GENERAL_CARDS) + 1) // 2)
+AVAILABLE_CARD_HEIGHT = max(360, SCREEN_HEIGHT - INFO_HEIGHT - SIDE_MARGIN * 4)
+MAX_CARD_HEIGHT_FROM_ROWS = (AVAILABLE_CARD_HEIGHT - CARD_GAP * (MAX_ROWS - 1)) // MAX_ROWS
+MAX_CARD_WIDTH_FROM_HEIGHT = int(MAX_CARD_HEIGHT_FROM_ROWS / 1.32)
+
+# Very large card art. Cards intentionally overlap.
+# The side panels are only anchor zones; the cards may extend over the board.
+CARD_WIDTH = max(300, min(390, SCREEN_WIDTH // 5))
 CARD_HEIGHT = int(CARD_WIDTH * 1.32)
-CARD_Y = BOARD_Y + BOARD_SIZE + INFO_HEIGHT + 8
+
+# Separate spacing from actual card size so cards can overlap heavily.
+LEFT_CARD_STEP = max(86, min(125, (SCREEN_HEIGHT - INFO_HEIGHT - SIDE_MARGIN * 4) // max(1, len(PIECE_POWER_CARDS))))
+RIGHT_CARD_STEP = max(
+    42,
+    (SCREEN_HEIGHT - INFO_HEIGHT - SIDE_MARGIN * 2 - CARD_HEIGHT) // max(1, (len(GENERAL_CARDS) - 1))
+)
+RIGHT_CARD_COLUMN_STEP = 0
+CARD_TOP = SIDE_MARGIN + 46
 
 
 def load_card_image(path):
@@ -424,6 +478,7 @@ class GameState:
         self.en_passant_target = None
 
         self.game_over = False
+        self.winner_message = None
         self.status_message = "White to move"
 
     def clone(self):
@@ -616,7 +671,8 @@ class GameState:
         self.active_card_owner = None
         self.selected = None
         self.legal_moves_for_selected = []
-        self.status_message = f"{winner.capitalize()} wins by {reason}."
+        self.winner_message = f"{winner.capitalize()} wins by {reason}."
+        self.status_message = self.winner_message
         add_animation("banner", text=self.status_message, color=GOLD, frames=80)
 
     def save_history(self):
@@ -1988,13 +2044,15 @@ class GameState:
                     self.game_over = False
                 else:
                     winner = "Black" if self.turn == WHITE else "White"
-                    self.status_message = f"Checkmate. {winner} wins."
+                    self.winner_message = f"{winner} wins by checkmate."
+                    self.status_message = self.winner_message
                     self.game_over = True
             else:
                 self.status_message = f"{self.turn.capitalize()} is in check"
         else:
             if not self.has_any_legal_moves(self.turn):
-                self.status_message = "Stalemate. Draw."
+                self.winner_message = "Draw by stalemate."
+                self.status_message = self.winner_message
                 self.game_over = True
             else:
                 self.status_message = f"{self.turn.capitalize()} to move"
@@ -2074,13 +2132,23 @@ def board_to_screen(row, col):
 
 
 def get_card_rects():
-    total_width = CARD_WIDTH * len(CARD_NAMES) + CARD_GAP * (len(CARD_NAMES) - 1)
-    start_x = (SCREEN_WIDTH - total_width) // 2
-
     rects = {}
-    for index, card_name in enumerate(CARD_NAMES):
-        x = start_x + index * (CARD_WIDTH + CARD_GAP)
-        rects[card_name] = pygame.Rect(x, CARD_Y, CARD_WIDTH, CARD_HEIGHT)
+
+    # Left side: piece power cards, one large vertical column.
+    left_x = LEFT_PANEL_X + 10
+
+    for index, card_name in enumerate(PIECE_POWER_CARDS):
+        y = CARD_TOP + index * LEFT_CARD_STEP
+        rects[card_name] = pygame.Rect(left_x, y, CARD_WIDTH, CARD_HEIGHT)
+
+    # Right side: general/game cards, one large overlapping column.
+    # The column spans the full vertical space; cards overlap by design.
+    right_start_x = SCREEN_WIDTH - CARD_WIDTH - 14
+
+    for index, card_name in enumerate(GENERAL_CARDS):
+        x = right_start_x
+        y = CARD_TOP + index * RIGHT_CARD_STEP
+        rects[card_name] = pygame.Rect(x, y, CARD_WIDTH, CARD_HEIGHT)
 
     return rects
 
@@ -2298,27 +2366,12 @@ def draw_single_card(rect, owner, card_name):
 
     cost = CARD_COSTS.get(card_name, 0)
 
-    # Shop price label.
-    if card_name in GAME_CARDS:
-        price_label = f"PLAY {cost}"
-    else:
-        price_label = f"{cost} Ether"
-
-    if used:
-        price_label = f"BUY {cost}"
-
-    price_surface = tiny_font.render(price_label, True, TEXT_COLOR)
-    price_bg = pygame.Surface((price_surface.get_width() + 8, price_surface.get_height() + 4), pygame.SRCALPHA)
-    price_bg.fill((0, 0, 0, 150))
-    card_surface.blit(price_bg, (4, CARD_HEIGHT - price_bg.get_height() - 4))
-    card_surface.blit(price_surface, (8, CARD_HEIGHT - price_bg.get_height() - 2))
-
     if used:
         overlay = pygame.Surface((CARD_WIDTH, CARD_HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 165))
         card_surface.blit(overlay, (0, 0))
 
-        buy_surface = tiny_font.render(f"BUY: {cost}", True, TEXT_COLOR)
+        buy_surface = tiny_font.render(f"BUY: {cost} ETHER", True, TEXT_COLOR)
         buy_rect = buy_surface.get_rect(center=(CARD_WIDTH // 2, CARD_HEIGHT // 2 + 20))
         card_surface.blit(buy_surface, buy_rect)
 
@@ -2333,55 +2386,108 @@ def draw_single_card(rect, owner, card_name):
         screen.blit(used_surface, used_rect)
 
 
+def draw_game_over_overlay():
+    if game.winner_message is None:
+        return
+
+    overlay = pygame.Surface((BOARD_SIZE, BOARD_SIZE), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 105))
+    screen.blit(overlay, (BOARD_X, BOARD_Y))
+
+    box_w = min(BOARD_SIZE - 80, 620)
+    box_h = 110
+    box = pygame.Rect(0, 0, box_w, box_h)
+    box.center = (BOARD_X + BOARD_SIZE // 2, BOARD_Y + BOARD_SIZE // 2)
+
+    pygame.draw.rect(screen, WOOD_FRAME_DARK, box, border_radius=16)
+    pygame.draw.rect(screen, GOLD, box, 4, border_radius=16)
+
+    title = small_font.render("GAME OVER", True, GOLD)
+    title_rect = title.get_rect(center=(box.centerx, box.y + 32))
+    screen.blit(title, title_rect)
+
+    result = small_font.render(game.winner_message, True, TEXT_COLOR)
+    result_rect = result.get_rect(center=(box.centerx, box.y + 72))
+    screen.blit(result, result_rect)
+
+
 def draw_sidebar():
-    # Bottom card shelf.
-    panel_rect = pygame.Rect(0, BOARD_Y + BOARD_SIZE, SCREEN_WIDTH, SCREEN_HEIGHT - (BOARD_Y + BOARD_SIZE))
-    pygame.draw.rect(screen, CARD_SHELF_BG, panel_rect)
+    # Left panel: piece power cards.
+    left_rect = pygame.Rect(0, 0, LEFT_PANEL_WIDTH, SCREEN_HEIGHT)
+    right_rect = pygame.Rect(RIGHT_PANEL_X, 0, RIGHT_PANEL_WIDTH, SCREEN_HEIGHT)
 
-    # Top edge and inner glow.
-    pygame.draw.line(screen, PANEL_EDGE, (0, panel_rect.y), (SCREEN_WIDTH, panel_rect.y), 5)
-    glow = pygame.Surface((SCREEN_WIDTH, panel_rect.height), pygame.SRCALPHA)
-    pygame.draw.rect(glow, (225, 190, 104, 22), pygame.Rect(0, 0, SCREEN_WIDTH, 44))
-    screen.blit(glow, (0, panel_rect.y))
+    pygame.draw.rect(screen, CARD_SHELF_BG, left_rect)
+    pygame.draw.rect(screen, CARD_SHELF_BG, right_rect)
 
-    # Header plaque.
-    plaque = pygame.Rect(max(16, BOARD_X), BOARD_Y + BOARD_SIZE + 6, min(840, SCREEN_WIDTH - 32), 32)
-    pygame.draw.rect(screen, WOOD_FRAME_DARK, plaque, border_radius=9)
-    pygame.draw.rect(screen, WOOD_FRAME, plaque, 2, border_radius=9)
+    pygame.draw.line(screen, PANEL_EDGE, (LEFT_PANEL_WIDTH - 1, 0), (LEFT_PANEL_WIDTH - 1, SCREEN_HEIGHT), 4)
+    pygame.draw.line(screen, PANEL_EDGE, (RIGHT_PANEL_X, 0), (RIGHT_PANEL_X, SCREEN_HEIGHT), 4)
 
-    player_text = (
-        f"{game.turn.capitalize()}'s Cards"
-        f"   |   Ether: White {game.ether[WHITE]} / Black {game.ether[BLACK]}"
-    )
+    # Header plaques.
+    left_header = pygame.Rect(10, 8, LEFT_PANEL_WIDTH - 20, 34)
+    right_header = pygame.Rect(RIGHT_PANEL_X + 10, 8, RIGHT_PANEL_WIDTH - 20, 34)
+
+    for plaque, title in [
+        (left_header, "Piece Powers"),
+        (right_header, "General Cards"),
+    ]:
+        pygame.draw.rect(screen, WOOD_FRAME_DARK, plaque, border_radius=8)
+        pygame.draw.rect(screen, WOOD_FRAME, plaque, 2, border_radius=8)
+        title_surface = tiny_font.render(title, True, PARCHMENT)
+        title_rect = title_surface.get_rect(center=plaque.center)
+        screen.blit(title_surface, title_rect)
+
+    # Player / Ether mini panels.
+    turn_box = pygame.Rect(10, SCREEN_HEIGHT - INFO_HEIGHT + 6, LEFT_PANEL_WIDTH - 20, INFO_HEIGHT - 12)
+    pygame.draw.rect(screen, WOOD_FRAME_DARK, turn_box, border_radius=8)
+    pygame.draw.rect(screen, GOLD, turn_box, 2, border_radius=8)
+
+    turn_text = tiny_font.render(f"{game.turn.capitalize()} turn", True, PARCHMENT)
+    ether_text_1 = tiny_font.render(f"W Ether: {game.ether[WHITE]}", True, TEXT_COLOR)
+    ether_text_2 = tiny_font.render(f"B Ether: {game.ether[BLACK]}", True, TEXT_COLOR)
+    screen.blit(turn_text, (turn_box.x + 8, turn_box.y + 4))
+    screen.blit(ether_text_1, (turn_box.x + 8, turn_box.y + 22))
+    screen.blit(ether_text_2, (turn_box.x + 8, turn_box.y + 40))
+
     if is_board_flipped():
-        player_text += "   |   Black perspective"
+        view_text = "Black view"
     else:
-        player_text += "   |   White perspective"
+        view_text = "White view"
 
+    view_surface = tiny_font.render(view_text, True, MUTED_TEXT)
+    screen.blit(view_surface, (RIGHT_PANEL_X + 14, SCREEN_HEIGHT - INFO_HEIGHT + 10))
+
+    status_flags = []
     if game.plague_active:
-        player_text += "   |   Plague active"
-
+        status_flags.append("Plague")
     if game.absolute_protection_active:
-        player_text += "   |   Protection active"
-
+        status_flags.append("Protection")
     if game.extra_blood_active:
-        player_text += "   |   ExtraBlood active"
+        status_flags.append("ExtraBlood")
 
-    player_surface = small_font.render(player_text, True, PARCHMENT)
-    screen.blit(player_surface, (plaque.x + 12, plaque.y + 4))
+    if status_flags:
+        flags = tiny_font.render(" | ".join(status_flags), True, GOLD)
+        screen.blit(flags, (RIGHT_PANEL_X + 14, SCREEN_HEIGHT - INFO_HEIGHT + 32))
 
     card_rects = get_card_rects()
     mouse_pos = pygame.mouse.get_pos()
+
+    hovered = None
 
     for card_name, rect in card_rects.items():
         if dragging_card == card_name:
             continue
 
         if rect.collidepoint(mouse_pos):
-            hover = rect.inflate(8, 8)
-            pygame.draw.rect(screen, (255, 220, 110), hover, 3, border_radius=12)
+            hovered = card_name
+            continue
 
         draw_single_card(rect, game.turn, card_name)
+
+    # Draw hovered card last and enlarged so overlapped cards are readable.
+    if hovered is not None and hovered != dragging_card:
+        rect = card_rects[hovered].inflate(44, 44)
+        pygame.draw.rect(screen, (255, 220, 110), rect.inflate(12, 12), 4, border_radius=16)
+        draw_single_card(rect, game.turn, hovered)
 
 
 def draw_dragging_card():
@@ -2393,8 +2499,8 @@ def draw_dragging_card():
     rect = pygame.Rect(
         mouse_x - drag_offset_x,
         mouse_y - drag_offset_y,
-        CARD_WIDTH,
-        CARD_HEIGHT
+        CARD_WIDTH + 34,
+        CARD_HEIGHT + 34
     )
 
     draw_single_card(rect, game.turn, dragging_card)
@@ -2407,19 +2513,56 @@ def draw_info_panel():
         card_text = "Windknight active: move the selected knight twice."
     elif game.active_card == "queentum":
         card_text = "Queentum active: click any legal teleport destination."
+    elif game.active_card == "inzone":
+        card_text = "InZone active: keep capturing with the selected piece."
     else:
-        card_text = "Click instant cards. Drag targeted cards. Checks give +5 Ether. R reset / ESC quit."
+        card_text = "Left: piece powers. Right: general cards. Click instant cards or drag targeted cards."
+
+    bar = pygame.Rect(LEFT_PANEL_WIDTH, INFO_Y, SCREEN_WIDTH - LEFT_PANEL_WIDTH - RIGHT_PANEL_WIDTH, INFO_HEIGHT)
+    pygame.draw.rect(screen, PANEL_BG, bar)
+    pygame.draw.line(screen, PANEL_EDGE, (bar.x, bar.y), (bar.right, bar.y), 4)
+
+    # Winner/result line is always prominent at game end.
+    if game.winner_message is not None:
+        result_surface = small_font.render(f"GAME OVER: {game.winner_message}", True, GOLD)
+        result_rect = result_surface.get_rect(center=(bar.centerx, bar.y + 20))
+        screen.blit(result_surface, result_rect)
+        first_line_y = bar.y + 46
+    else:
+        turn_surface = small_font.render(f"{game.turn.capitalize()} to act", True, GOLD)
+        screen.blit(turn_surface, (bar.x + 14, bar.y + 10))
+        first_line_y = bar.y + 38
 
     status_surface = tiny_font.render(game.status_message, True, TEXT_COLOR)
     help_surface = tiny_font.render(card_text, True, MUTED_TEXT)
-    ether_text = f"Ether: White {game.ether[WHITE]} | Black {game.ether[BLACK]}"
-    ether_surface = tiny_font.render(ether_text, True, TEXT_COLOR)
 
-    x = max(20, BOARD_X + BOARD_SIZE // 2 - 260)
-    y = BOARD_Y + BOARD_SIZE + 8
-    screen.blit(status_surface, (x, y))
-    screen.blit(help_surface, (x, y + 18))
-    screen.blit(ether_surface, (max(20, BOARD_X + BOARD_SIZE - 190), y))
+    ether_text = f"Ether: White {game.ether[WHITE]} | Black {game.ether[BLACK]}"
+    ether_surface = tiny_font.render(ether_text, True, GOLD)
+
+    rules_text = "Money: +1 Ether per tile moved | capture = piece value | check = +5 Ether | click USED ability to refill"
+    rules_surface = tiny_font.render(rules_text, True, PARCHMENT)
+
+    active_flags = []
+    if game.plague_active:
+        active_flags.append("Plague")
+    if game.absolute_protection_active:
+        active_flags.append("AbsoluteProtection")
+    if game.extra_blood_active:
+        active_flags.append("ExtraBlood")
+    if game.active_card:
+        active_flags.append(f"Active card: {game.active_card}")
+
+    flags_text = "Active effects: " + (", ".join(active_flags) if active_flags else "none")
+    flags_surface = tiny_font.render(flags_text, True, MUTED_TEXT)
+
+    x = bar.x + 14
+    screen.blit(status_surface, (x, first_line_y))
+    screen.blit(help_surface, (x, first_line_y + 22))
+    screen.blit(rules_surface, (x, first_line_y + 44))
+    screen.blit(flags_surface, (x, first_line_y + 66))
+
+    screen.blit(ether_surface, (bar.right - ether_surface.get_width() - 14, first_line_y))
+
 
 
 def get_square_from_mouse(pos):
@@ -2471,7 +2614,6 @@ while running:
             for card_name, rect in card_rects.items():
                 if rect.collidepoint(mouse_pos):
                     clicked_card = card_name
-                    break
 
             if clicked_card is not None:
                 if clicked_card in ABILITY_CARDS and clicked_card in game.used_cards[game.turn]:
@@ -2563,6 +2705,7 @@ while running:
     draw_fire_tiles()
     draw_pieces()
     draw_animations()
+    draw_game_over_overlay()
     draw_sidebar()
     draw_dragging_card()
     draw_info_panel()
