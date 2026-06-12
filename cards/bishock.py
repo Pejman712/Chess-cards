@@ -6,7 +6,6 @@ def get_bishock_destroyed_squares(game, row, col):
     Kings are not destroyed.
     The bishop also destroys itself.
     """
-
     piece = game.board[row][col]
 
     if piece is None:
@@ -39,5 +38,4 @@ def get_bishock_destroyed_squares(game, row, col):
             current_col += dc
 
     destroyed.append((row, col))
-
     return destroyed
