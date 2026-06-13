@@ -55,40 +55,40 @@ SCREEN_WIDTH, SCREEN_HEIGHT = display.get_size()
 screen = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
 clock = pygame.time.Clock()
 
-# Layout:
-# piece power cards on the left, general/game cards on the right, board
-# centered, status bar at the bottom. Cards are shown at the art's native
-# resolution, so each panel wraps into as many columns as needed for the
-# rows that fit on screen.
-INFO_HEIGHT = 110
+# Layout (top to bottom): info bar at the very top, the board in the middle,
+# and the player's hand fanned in an arc across the bottom.
 SIDE_MARGIN = 16
+BOARD_MARGIN = 6  # tight vertical gap so the board can take more space
 PANEL_PAD = 12
-HEADER_H = 40
+HEADER_H = 30
 CARD_GAP = 10
-CARD_TOP = HEADER_H + 16
-CARD_WIDTH = 183  # native size of the card art; never resized
-CARD_HEIGHT = 230
-CARD_ASPECT = CARD_HEIGHT / CARD_WIDTH
+INFO_HEIGHT = 92  # taller bar to fit the larger fonts
+CARD_ASPECT = 230 / 183  # card art aspect (height / width)
 
-CARD_ROWS_FIT = max(
-    1, (SCREEN_HEIGHT - CARD_TOP - SIDE_MARGIN + CARD_GAP) // (CARD_HEIGHT + CARD_GAP)
-)
-# Panels wrap into columns. Counts match the card lists defined below:
-# 6 piece-power cards on the left, 18 game cards on the right.
-LEFT_CARD_COLS = -(-6 // CARD_ROWS_FIT)
-RIGHT_CARD_COLS = -(-18 // CARD_ROWS_FIT)
+# The board only reserves HAND_RESERVE at the bottom for the hand. The actual
+# cards are larger than that and are anchored to the screen bottom, so they
+# fan up and overlap the board's lower edge a little.
+HAND_RESERVE = int(SCREEN_HEIGHT * 0.225)
+TRAY_HEIGHT = HAND_RESERVE
+TRAY_Y = SCREEN_HEIGHT - HAND_RESERVE
 
-LEFT_PANEL_WIDTH = LEFT_CARD_COLS * CARD_WIDTH + PANEL_PAD * (LEFT_CARD_COLS + 1)
-RIGHT_PANEL_WIDTH = RIGHT_CARD_COLS * CARD_WIDTH + PANEL_PAD * (RIGHT_CARD_COLS + 1)
+CARD_HEIGHT = int(SCREEN_HEIGHT * 0.20)
+CARD_WIDTH = int(CARD_HEIGHT / CARD_ASPECT)
+TRAY_COLS = max(1, (SCREEN_WIDTH - 2 * SIDE_MARGIN) // (CARD_WIDTH + PANEL_PAD))
+ARC_LIFT = int(CARD_HEIGHT * 0.10)  # how high the middle of the fan rises
+ACTION_BTN_W = 156  # End Turn / Discard buttons flanking the hand
 
-BOARD_AREA_WIDTH = SCREEN_WIDTH - LEFT_PANEL_WIDTH - RIGHT_PANEL_WIDTH - SIDE_MARGIN * 2
-BOARD_AREA_HEIGHT = SCREEN_HEIGHT - INFO_HEIGHT - SIDE_MARGIN * 2
+# Info bar pinned to the very top; the board fills the space between them.
+INFO_Y = 0
+BOARD_AREA_WIDTH = SCREEN_WIDTH - 2 * SIDE_MARGIN
+BOARD_AREA_TOP = INFO_HEIGHT + BOARD_MARGIN
+BOARD_AREA_HEIGHT = (TRAY_Y - BOARD_MARGIN) - BOARD_AREA_TOP
 
-# The perspective board has 16x12px squares, so on screen a square is 4
-# wide to 3 tall. The vertical budget per square width: 8 rows * 0.75,
-# plus 1.25 headroom for sprites poking above the top rank, plus ~0.56
-# for the board's bottom frame and 3D lip.
-SQUARE_W = min(BOARD_AREA_WIDTH // COLS, int(BOARD_AREA_HEIGHT / 7.81))
+# The perspective board has 16x12px squares (4 wide : 3 tall on screen). The
+# vertical budget per square width is 8 rows * 0.75 = 6, plus 1.25 headroom for
+# the back-rank sprites. The board's bottom lip is allowed to tuck behind the
+# hand cards, so it is not reserved here.
+SQUARE_W = min(BOARD_AREA_WIDTH // COLS, int(BOARD_AREA_HEIGHT / 7.25))
 SQUARE_W -= SQUARE_W % 4
 SQUARE_H = SQUARE_W * 3 // 4
 SQUARE_SIZE = SQUARE_W  # piece sprites and effect sizes scale off the square width
@@ -97,14 +97,10 @@ BOARD_W = SQUARE_W * COLS
 BOARD_H = SQUARE_H * ROWS
 PIECE_HEADROOM = SQUARE_W * 2 - SQUARE_H
 
-BOARD_X = LEFT_PANEL_WIDTH + SIDE_MARGIN + max(0, (BOARD_AREA_WIDTH - BOARD_W) // 2)
-BOARD_Y = SIDE_MARGIN + PIECE_HEADROOM + max(
+BOARD_X = SIDE_MARGIN + max(0, (BOARD_AREA_WIDTH - BOARD_W) // 2)
+BOARD_Y = BOARD_AREA_TOP + PIECE_HEADROOM + max(
     0, (BOARD_AREA_HEIGHT - PIECE_HEADROOM - BOARD_H) // 2
 )
-
-LEFT_PANEL_X = 0
-RIGHT_PANEL_X = SCREEN_WIDTH - RIGHT_PANEL_WIDTH
-INFO_Y = SCREEN_HEIGHT - INFO_HEIGHT
 
 WIDTH = SCREEN_WIDTH
 HEIGHT = SCREEN_HEIGHT
@@ -156,12 +152,14 @@ def load_font(size, fallback_size, bold=False):
         return pygame.font.SysFont("dejavusans", fallback_size, bold=bold)
 
 
-title_font = load_font(32, 24, bold=True)
-small_font = load_font(16, 17)
-tiny_font = load_font(16, 14)
-badge_font = load_font(16, 13, bold=True)
+title_font = load_font(48, 32, bold=True)
+small_font = load_font(24, 22, bold=True)
+tiny_font = load_font(20, 18)
+badge_font = load_font(20, 16, bold=True)
 menu_title_font = load_font(96, 64, bold=True)
 menu_font = load_font(32, 26, bold=True)
+home_title_font = load_font(160, 120, bold=True)  # big CHESSBYTE logo
+menu_option_font = load_font(48, 36, bold=True)   # START / CATALOG / ...
 
 TEXT_SHADOW_COLOR = (24, 13, 8)
 
@@ -265,38 +263,24 @@ BOARD_IMAGE, BOARD_IMAGE_OX, BOARD_IMAGE_OY, LIGHT_SQUARE, DARK_SQUARE = load_pi
 # Animated background: a looping GIF decoded once at startup. Frames are
 # stored at half screen resolution to keep memory reasonable and upscaled
 # when drawn; a dark tint baked into each frame keeps the play area readable.
-BACKGROUND_GIF = os.path.join(ASSET_DIR, "background.gif")
-BACKGROUND_DIM = 120  # 0 = full brightness, 255 = black
+BACKGROUND_FILE = os.path.join(ASSET_DIR, "background.png")
+BACKGROUND_DIM = 110  # 0 = full brightness, 255 = black
 
 
-def load_background_frames():
+def load_background_image():
     try:
-        from PIL import Image, ImageSequence
-    except ImportError:
-        return [], 40
-
-    try:
-        gif = Image.open(BACKGROUND_GIF)
-    except OSError:
-        return [], 40
-
-    frame_ms = max(20, gif.info.get("duration", 40))
-    half_size = (SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2)
-    tint = pygame.Surface(half_size)
+        image = pygame.image.load(BACKGROUND_FILE).convert()
+    except (pygame.error, FileNotFoundError):
+        return None
+    image = pygame.transform.scale(image, (SCREEN_WIDTH, SCREEN_HEIGHT))
+    # Darken so the board and cards stay readable on top.
+    tint = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
     tint.set_alpha(BACKGROUND_DIM)
-
-    frames = []
-    for frame in ImageSequence.Iterator(gif):
-        rgb = frame.convert("RGB")
-        surface = pygame.image.frombuffer(rgb.tobytes(), rgb.size, "RGB").convert()
-        surface = pygame.transform.scale(surface, half_size)
-        surface.blit(tint, (0, 0))
-        frames.append(surface)
-
-    return frames, frame_ms
+    image.blit(tint, (0, 0))
+    return image
 
 
-BACKGROUND_FRAMES, BACKGROUND_FRAME_MS = load_background_frames()
+BACKGROUND_IMAGE = load_background_image()
 
 # Armageddon sprite animation, sliced from assets/meteor_strike.png: the
 # first METEOR_FALL_COUNT frames are the falling meteor, the rest play
@@ -446,6 +430,9 @@ GENERAL_CARDS = [
     "iguess",
 ]
 
+# Tray order: piece-power cards first, then game cards.
+ALL_TRAY_CARDS = PIECE_POWER_CARDS + GENERAL_CARDS
+
 # Which of your pieces a draggable card may be played on. A piece letter means
 # only that type; "any" means any of your pieces; "non_king" means any but the
 # king. Used to highlight valid targets while a card is being dragged.
@@ -502,7 +489,7 @@ BLACK = "black"
 # - 1 Ether per tile moved
 # - captured piece value in Ether
 #
-# Clicking a USED card in the bottom row buys/refills that ability.
+# Cards are played from hand for Ether; they never recharge (deck system).
 PIECE_VALUES = {
     "p": 1,
     "n": 3,
@@ -643,25 +630,86 @@ def add_animation(kind, squares=None, text="", color=(255, 220, 120), frames=30,
     })
 
 
-# The upscaled frame is cached: the GIF runs at ~25fps while the game loop
-# runs faster, so most ticks reuse the previous scale.
-_background_cache = {"index": None, "surface": None}
+# A handful of faint card images drift across the background with random
+# position, velocity, rotation and spin.
+FLOATING_CARD_COUNT = 30
+FLOATING_CARD_ALPHA = 200
+_floating_cards = []
+_last_float_ticks = [0]
+
+
+def init_floating_cards():
+    card_w = int(SCREEN_HEIGHT * 0.13)
+    card_h = int(card_w * CARD_ASPECT)
+    names = [c for c in ALL_TRAY_CARDS if card_images[WHITE].get(c) is not None]
+    if not names:
+        return
+
+    # Spread starting positions over a grid so the cards stay evenly distributed
+    # rather than clustering; each sits at its cell center with a little jitter.
+    cols = max(1, math.ceil(math.sqrt(FLOATING_CARD_COUNT * SCREEN_WIDTH / SCREEN_HEIGHT)))
+    rows = max(1, math.ceil(FLOATING_CARD_COUNT / cols))
+    cell_w = SCREEN_WIDTH / cols
+    cell_h = SCREEN_HEIGHT / rows
+
+    for i in range(FLOATING_CARD_COUNT):
+        name = random.choice(names)
+        owner = random.choice((WHITE, BLACK))
+        base = pygame.transform.smoothscale(card_images[owner][name], (card_w, card_h)).convert_alpha()
+        # Bake the faint alpha in so rotation keeps it subtle.
+        base.fill((255, 255, 255, FLOATING_CARD_ALPHA), special_flags=pygame.BLEND_RGBA_MULT)
+
+        col = i % cols
+        row = i // cols
+        cx = (col + 0.5) * cell_w + random.uniform(-cell_w * 0.3, cell_w * 0.3)
+        cy = (row + 0.5) * cell_h + random.uniform(-cell_h * 0.3, cell_h * 0.3)
+
+        _floating_cards.append({
+            "base": base,
+            "x": cx,
+            "y": cy,
+            "vx": random.uniform(-22, 22),
+            "vy": random.uniform(-22, 22),
+            "angle": random.uniform(0, 360),
+            "spin": random.uniform(-18, 18),
+        })
+
+
+def draw_floating_cards():
+    if not _floating_cards:
+        init_floating_cards()
+
+    now = pygame.time.get_ticks()
+    dt = min(0.05, (now - _last_float_ticks[0]) / 1000.0) if _last_float_ticks[0] else 0.016
+    _last_float_ticks[0] = now
+
+    margin = int(SCREEN_HEIGHT * 0.18)
+    for card in _floating_cards:
+        card["x"] += card["vx"] * dt
+        card["y"] += card["vy"] * dt
+        card["angle"] = (card["angle"] + card["spin"] * dt) % 360
+
+        # Wrap around the screen edges (with a margin so they drift off fully).
+        if card["x"] < -margin:
+            card["x"] = SCREEN_WIDTH + margin
+        elif card["x"] > SCREEN_WIDTH + margin:
+            card["x"] = -margin
+        if card["y"] < -margin:
+            card["y"] = SCREEN_HEIGHT + margin
+        elif card["y"] > SCREEN_HEIGHT + margin:
+            card["y"] = -margin
+
+        rotated = pygame.transform.rotate(card["base"], card["angle"])
+        screen.blit(rotated, rotated.get_rect(center=(int(card["x"]), int(card["y"]))))
 
 
 def draw_background():
-    if not BACKGROUND_FRAMES:
+    if BACKGROUND_IMAGE is not None:
+        screen.blit(BACKGROUND_IMAGE, (0, 0))
+    else:
         screen.fill((0, 0, 0))
-        return
 
-    index = (pygame.time.get_ticks() // BACKGROUND_FRAME_MS) % len(BACKGROUND_FRAMES)
-
-    if _background_cache["index"] != index:
-        _background_cache["index"] = index
-        _background_cache["surface"] = pygame.transform.scale(
-            BACKGROUND_FRAMES[index], (SCREEN_WIDTH, SCREEN_HEIGHT)
-        )
-
-    screen.blit(_background_cache["surface"], (0, 0))
+    draw_floating_cards()
 
 
 def draw_animations():
@@ -903,13 +951,17 @@ class GameState:
         # the turn never passes automatically; T passes it manually.
         self.cheat_mode = False
 
-        # Card system
+        # Card system (Slay-the-Spire style): each player has a deck, a hand,
+        # and a discard pile. Cards are played from hand for Ether and never
+        # recharge - they go to the discard pile. Players draw only by
+        # discarding (drawing that many back on their next turn).
         self.active_card = None
         self.active_card_owner = None
-        self.used_cards = {
-            WHITE: set(),
-            BLACK: set(),
-        }
+        self.deck = {WHITE: [], BLACK: []}
+        self.hand = {WHITE: [], BLACK: []}
+        self.discard = {WHITE: [], BLACK: []}
+        self.pending_draw = {WHITE: 0, BLACK: 0}
+        self.discard_marks = set()  # cards in the current hand marked to discard
 
         # Economy
         self.ether = {
@@ -957,10 +1009,13 @@ class GameState:
         # friendly piece adjacent to their king.
         self.ifeelsafe_active = set()
 
-        # I Guess: permanent extra moves per turn. pending_extra_moves counts
-        # how many extra moves remain in the current turn before it passes.
+        # I Guess: permanent extra moves per turn (added to the 1 base move).
         self.bonus_turns = {WHITE: 0, BLACK: 0}
         self.pending_extra_moves = {WHITE: 0, BLACK: 0}
+
+        # A turn ends only when the player makes their chess move(s) AND presses
+        # End Turn. moves_made_this_turn tracks how many chess moves were made.
+        self.moves_made_this_turn = 0
 
         # Nope: snapshot of the state just before each player's last game card,
         # so the opponent can cancel it.
@@ -988,6 +1043,97 @@ class GameState:
         self.winner_message = None
         self.status_message = "White to move"
 
+        self.deal_starting_hands()
+
+    # -----------------------------
+    # Deck / hand / discard
+    # -----------------------------
+    HAND_START = 5
+
+    def deal_starting_hands(self):
+        for color in (WHITE, BLACK):
+            self.deck[color] = list(ALL_TRAY_CARDS)
+            random.shuffle(self.deck[color])
+            self.hand[color] = []
+            self.discard[color] = []
+            self.pending_draw[color] = 0
+            self.draw_cards(color, self.HAND_START)
+
+    def draw_cards(self, color, n):
+        for _ in range(n):
+            if not self.deck[color]:
+                # Reshuffle the discard pile into the deck.
+                self.deck[color] = self.discard[color]
+                self.discard[color] = []
+                random.shuffle(self.deck[color])
+            if not self.deck[color]:
+                break  # no cards anywhere
+            self.hand[color].append(self.deck[color].pop())
+
+    def spend_card(self, card_name):
+        display = CARD_INFO.get(card_name, (card_name,))[0]
+
+        if card_name not in self.hand[self.turn]:
+            self.status_message = f"{display} is not in your hand."
+            return False
+
+        cost = CARD_COSTS.get(card_name, 0)
+        if self.ether[self.turn] < cost:
+            self.status_message = f"Not enough Ether for {display}. Need {cost}, have {self.ether[self.turn]}."
+            return False
+
+        self.save_history()
+        self.card_undo[self.turn] = copy.deepcopy(self.history[-1])
+        self.ether[self.turn] -= cost
+        self.hand[self.turn].remove(card_name)
+        self.discard[self.turn].append(card_name)
+        self.discard_marks.discard(card_name)
+        return True
+
+    def finish_card(self, message):
+        # A free card effect resolves without ending the turn.
+        msg = message.replace("{player}", self.turn.capitalize())
+        add_animation("banner", text=msg, color=GOLD, frames=42)
+        self.active_card = None
+        self.active_card_owner = None
+        self.selected = None
+        self.legal_moves_for_selected = []
+        self.update_status()
+        if not self.is_in_check(self.turn) and not self.game_over:
+            self.status_message = msg
+
+    def end_turn(self, discard_marked=False):
+        if self.game_over:
+            return
+
+        # A special card move in progress must be finished first.
+        if self.active_card in ("pawntastic", "queentum", "windknight", "inzone"):
+            self.status_message = "Finish the active card move first."
+            return
+
+        # The player must make their chess move before the turn can pass.
+        if self.moves_made_this_turn < 1 and self.has_any_legal_moves(self.turn):
+            self.status_message = "Move a piece before ending your turn."
+            return
+
+        if discard_marked:
+            marked = [c for c in self.hand[self.turn] if c in self.discard_marks]
+            for card_name in marked:
+                self.hand[self.turn].remove(card_name)
+                self.discard[self.turn].append(card_name)
+            self.pending_draw[self.turn] = len(marked)
+
+        self.discard_marks = set()
+        self.award_check_bonus_for_player(self.turn)
+        self.decay_fire_tiles()
+        self.active_card = None
+        self.active_card_owner = None
+        self.pass_turn()
+        self.selected = None
+        self.legal_moves_for_selected = []
+        self.start_turn_effects()
+        self.update_status()
+
     def clone(self):
         return copy.deepcopy(self)
 
@@ -1014,14 +1160,31 @@ class GameState:
                     count += 1
         return count
 
+    def moves_allowed(self):
+        # 1 base chess move per turn, plus any granted by "I Guess".
+        return 1 + self.bonus_turns.get(self.turn, 0)
+
+    def finish_chess_move(self):
+        # A chess move is made but the turn does NOT pass - the player must
+        # press End Turn to hand over (after they have moved).
+        self.moves_made_this_turn += 1
+        self.active_card = None
+        self.active_card_owner = None
+        self.windknight_square = None
+        self.windknight_moves_remaining = 0
+        self.inzone_square = None
+        self.inzone_captures = 0
+        self.selected = None
+        self.legal_moves_for_selected = []
+
+        if self.moves_made_this_turn < self.moves_allowed():
+            self.status_message = f"{self.turn.capitalize()} may move again, or press END TURN."
+        else:
+            self.status_message = f"{self.turn.capitalize()} moved. Press END TURN."
+
     def pass_turn(self):
         # In cheat mode the turn is frozen so one player can act repeatedly.
         if self.cheat_mode:
-            return
-
-        # "I Guess": spend a banked extra move instead of ending the turn.
-        if self.pending_extra_moves.get(self.turn, 0) > 0:
-            self.pending_extra_moves[self.turn] -= 1
             return
 
         # "I Feel Safe": end-of-turn Ether for a fortified king.
@@ -1034,7 +1197,7 @@ class GameState:
                     add_animation("coin", squares=[king], text=f"+{bonus}", color=(120, 230, 255), frames=32)
 
         self.turn = self.enemy_color(self.turn)
-        self.pending_extra_moves[self.turn] = self.bonus_turns.get(self.turn, 0)
+        self.moves_made_this_turn = 0
 
     def in_bounds(self, row, col):
         return 0 <= row < 8 and 0 <= col < 8
@@ -1081,73 +1244,16 @@ class GameState:
             return
         self.ether[color] += amount
 
-    def refill_card(self, card_name):
-        if card_name not in self.used_cards[self.turn]:
-            self.status_message = f"{card_name.capitalize()} is not used yet."
-            return
-
-        cost = CARD_COSTS.get(card_name, 0)
-
-        if self.ether[self.turn] < cost:
-            self.status_message = (
-                f"Not enough Ether to refill {card_name.capitalize()}. "
-                f"Need {cost}, have {self.ether[self.turn]}."
-            )
-            return
-
-        self.ether[self.turn] -= cost
-        self.used_cards[self.turn].remove(card_name)
-        self.status_message = (
-            f"{self.turn.capitalize()} refilled {card_name.capitalize()} "
-            f"for {cost} Ether."
-        )
-
-    def can_pay_for_card(self, card_name):
-        return self.ether[self.turn] >= CARD_COSTS.get(card_name, 0)
-
-    def pay_for_game_card(self, card_name):
-        cost = CARD_COSTS.get(card_name, 0)
-
-        if self.ether[self.turn] < cost:
-            self.status_message = (
-                f"Not enough Ether for {card_name.capitalize()}. "
-                f"Need {cost}, have {self.ether[self.turn]}."
-            )
-            return False
-
-        self.save_history()
-        self.ether[self.turn] -= cost
-
-        # Remember the pre-card state so the opponent's Nope can cancel it.
-        self.card_undo[self.turn] = copy.deepcopy(self.history[-1])
-        return True
-
-    def consume_turn_after_game_card(self, message):
-        add_animation("banner", text=message.replace("{player}", self.turn.capitalize()), color=GOLD, frames=42)
-        self.active_card = None
-        self.active_card_owner = None
-        self.selected = None
-        self.legal_moves_for_selected = []
-        self.windknight_square = None
-        self.windknight_moves_remaining = 0
-        self.decay_fire_tiles()
-
-        played_by = self.turn
-        self.award_check_bonus_for_player(played_by)
-        self.pass_turn()
-        self.status_message = message.replace("{player}", played_by.capitalize())
-        self.start_turn_effects()
-        self.update_status()
-
-        # Preserve the game-card message unless the new player is in check/checkmate.
-        if not self.is_in_check(self.turn) and not self.game_over:
-            self.status_message = message.replace("{player}", played_by.capitalize())
-
     def start_turn_effects(self):
         # Run once per real turn, not on each extra "I Guess" move.
         if self._effects_applied_for == self.turn:
             return
         self._effects_applied_for = self.turn
+
+        # Draw the cards owed from discarding on the previous turn.
+        if self.pending_draw[self.turn] > 0:
+            self.draw_cards(self.turn, self.pending_draw[self.turn])
+            self.pending_draw[self.turn] = 0
 
         # AbsoluteProtection expires when the protected player gets the turn back.
         if self.turn in self.absolute_protection_active:
@@ -1259,7 +1365,10 @@ class GameState:
             "propaganda_active": copy.deepcopy(self.propaganda_active),
             "ifeelsafe_active": copy.deepcopy(self.ifeelsafe_active),
             "bonus_turns": copy.deepcopy(self.bonus_turns),
-            "used_cards": copy.deepcopy(self.used_cards),
+            "deck": copy.deepcopy(self.deck),
+            "hand": copy.deepcopy(self.hand),
+            "discard": copy.deepcopy(self.discard),
+            "pending_draw": copy.deepcopy(self.pending_draw),
             "ether": copy.deepcopy(self.ether),
             "turn": self.turn,
             "white_king_moved": self.white_king_moved,
@@ -1299,7 +1408,10 @@ class GameState:
             self.propaganda_active = copy.deepcopy(snapshot["propaganda_active"])
             self.ifeelsafe_active = copy.deepcopy(snapshot["ifeelsafe_active"])
             self.bonus_turns = copy.deepcopy(snapshot["bonus_turns"])
-            self.used_cards = copy.deepcopy(snapshot["used_cards"])
+            self.deck = copy.deepcopy(snapshot["deck"])
+            self.hand = copy.deepcopy(snapshot["hand"])
+            self.discard = copy.deepcopy(snapshot["discard"])
+            self.pending_draw = copy.deepcopy(snapshot["pending_draw"])
             if not keep_ether:
                 self.ether = copy.deepcopy(snapshot["ether"])
             if not keep_turn:
@@ -1388,35 +1500,32 @@ class GameState:
         if self.game_over:
             return
 
-        if "pawntastic" in self.used_cards[self.turn]:
-            self.status_message = f"{self.turn.capitalize()} has already used Pawntastic."
+        if self.moves_made_this_turn >= self.moves_allowed():
+            self.status_message = "No moves left this turn. Press END TURN."
             return
 
         piece = self.board[row][col]
 
-        if piece is None:
+        if piece is None or self.piece_color(piece) != self.turn:
             self.status_message = "Drop Pawntastic on one of your pawns."
-            return
-
-        if self.piece_color(piece) != self.turn:
-            self.status_message = "You can only use Pawntastic on your own pawn."
             return
 
         if piece.lower() != "p":
             self.status_message = "Pawntastic only works on pawns."
             return
 
+        moves = self.get_legal_moves(row, col)
+        if not moves:
+            self.status_message = "That pawn has no Pawntastic moves."
+            return
+
+        if not self.spend_card("pawntastic"):
+            return
+
         self.active_card = "pawntastic"
         self.active_card_owner = self.turn
         self.selected = (row, col)
-        self.legal_moves_for_selected = self.get_legal_moves(row, col)
-
-        if not self.legal_moves_for_selected:
-            self.active_card = None
-            self.active_card_owner = None
-            self.selected = None
-            self.status_message = "That pawn has no Pawntastic moves."
-            return
+        self.legal_moves_for_selected = moves
 
         add_animation("magic", squares=[(row, col)], text="PAWN", color=(120, 255, 130), frames=26)
         self.status_message = f"{self.turn.capitalize()} used Pawntastic. Choose the pawn's move."
@@ -1425,18 +1534,10 @@ class GameState:
         if self.game_over:
             return
 
-        if "bishock" in self.used_cards[self.turn]:
-            self.status_message = f"{self.turn.capitalize()} has already used Bishock."
-            return
-
         piece = self.board[row][col]
 
-        if piece is None:
+        if piece is None or self.piece_color(piece) != self.turn:
             self.status_message = "Drop Bishock on one of your bishops."
-            return
-
-        if self.piece_color(piece) != self.turn:
-            self.status_message = "You can only use Bishock on your own bishop."
             return
 
         if piece.lower() != "b":
@@ -1449,7 +1550,8 @@ class GameState:
             self.status_message = "Bishock found nothing to destroy."
             return
 
-        self.save_history()
+        if not self.spend_card("bishock"):
+            return
 
         ether_gained = 0
 
@@ -1472,88 +1574,55 @@ class GameState:
 
         self.add_ether(self.turn, ether_gained)
         add_animation("blast", squares=destroyed_squares, text="ZAP", color=(170, 85, 255), frames=36)
-
-        self.used_cards[self.turn].add("bishock")
-
-        self.active_card = None
-        self.active_card_owner = None
-        self.selected = None
-        self.legal_moves_for_selected = []
-
-        self.decay_fire_tiles()
-        self.pass_turn()
-        self.start_turn_effects()
-        self.update_status()
+        self.finish_card(f"{{player}} used Bishock and gained {ether_gained} Ether.")
 
     def activate_rookdemon_on_square(self, row, col):
         if self.game_over:
             return
 
-        if "rookdemon" in self.used_cards[self.turn]:
-            self.status_message = f"{self.turn.capitalize()} has already used Rookdemon."
-            return
-
         piece = self.board[row][col]
 
-        if piece is None:
+        if piece is None or self.piece_color(piece) != self.turn:
             self.status_message = "Drop Rookdemon on one of your rooks."
-            return
-
-        if self.piece_color(piece) != self.turn:
-            self.status_message = "You can only use Rookdemon on your own rook."
             return
 
         if piece.lower() != "r":
             self.status_message = "Rookdemon only works on rooks."
             return
 
-        self.save_history()
+        if not self.spend_card("rookdemon"):
+            return
+
         self.rookdemon_rooks[(row, col)] = 2
-        self.used_cards[self.turn].add("rookdemon")
         add_animation("magic", squares=[(row, col)], text="FIRE", color=(255, 90, 35), frames=36)
-
-        self.selected = None
-        self.legal_moves_for_selected = []
-        self.active_card = None
-        self.active_card_owner = None
-
-        self.status_message = f"{self.turn.capitalize()} empowered a rook with Rookdemon."
-        self.award_check_bonus_for_player(self.turn)
-        self.decay_fire_tiles()
-        self.pass_turn()
-        self.start_turn_effects()
-        self.update_status()
+        self.finish_card("{player} empowered a rook with Rookdemon.")
 
     def activate_windknight_on_square(self, row, col):
         if self.game_over:
             return
 
-        if "windknight" in self.used_cards[self.turn]:
-            self.status_message = f"{self.turn.capitalize()} has already used Windknight."
+        if self.moves_made_this_turn >= self.moves_allowed():
+            self.status_message = "No moves left this turn. Press END TURN."
             return
 
         if not is_valid_windknight_target(self, row, col):
             self.status_message = "Drop Windknight on one of your knights."
             return
 
+        moves = self.get_legal_moves(row, col)
+        if not moves:
+            self.status_message = "That knight has no legal Windknight move."
+            return
+
+        if not self.spend_card("windknight"):
+            return
+
         self.active_card = "windknight"
         self.active_card_owner = self.turn
         self.windknight_square = (row, col)
         self.windknight_moves_remaining = 2
-        self.used_cards[self.turn].add("windknight")
-
         self.selected = (row, col)
-        self.legal_moves_for_selected = self.get_legal_moves(row, col)
-
-        if not self.legal_moves_for_selected:
-            self.active_card = None
-            self.active_card_owner = None
-            self.windknight_square = None
-            self.windknight_moves_remaining = 0
-            self.used_cards[self.turn].discard("windknight")
-            self.selected = None
-            self.status_message = "That knight has no legal Windknight move."
-            return
+        self.legal_moves_for_selected = moves
 
         add_animation("magic", squares=[(row, col)], text="WIND", color=(90, 220, 255), frames=32)
         self.status_message = f"{self.turn.capitalize()} used Windknight. Move the knight twice."
@@ -1563,35 +1632,32 @@ class GameState:
         if self.game_over:
             return
 
-        if "queentum" in self.used_cards[self.turn]:
-            self.status_message = f"{self.turn.capitalize()} has already used Queentum."
+        if self.moves_made_this_turn >= self.moves_allowed():
+            self.status_message = "No moves left this turn. Press END TURN."
             return
 
         piece = self.board[row][col]
 
-        if piece is None:
+        if piece is None or self.piece_color(piece) != self.turn:
             self.status_message = "Drop Queentum on one of your queens."
-            return
-
-        if self.piece_color(piece) != self.turn:
-            self.status_message = "You can only use Queentum on your own queen."
             return
 
         if piece.lower() != "q":
             self.status_message = "Queentum only works on queens."
             return
 
+        moves = self.get_legal_moves(row, col)
+        if not moves:
+            self.status_message = "That queen has no legal Queentum teleport."
+            return
+
+        if not self.spend_card("queentum"):
+            return
+
         self.active_card = "queentum"
         self.active_card_owner = self.turn
         self.selected = (row, col)
-        self.legal_moves_for_selected = self.get_legal_moves(row, col)
-
-        if not self.legal_moves_for_selected:
-            self.active_card = None
-            self.active_card_owner = None
-            self.selected = None
-            self.status_message = "That queen has no legal Queentum teleport."
-            return
+        self.legal_moves_for_selected = moves
 
         add_animation("magic", squares=[(row, col)], text="QUANTUM", color=(200, 120, 255), frames=32)
         self.status_message = f"{self.turn.capitalize()} used Queentum. Choose any legal teleport square."
@@ -1601,7 +1667,11 @@ class GameState:
         if color is None:
             color = self.turn
 
-        if "longlivetheking" in self.used_cards[color]:
+        # Must hold the card and be able to pay for it.
+        if "longlivetheking" not in self.hand[color]:
+            return False
+
+        if self.ether[color] < CARD_COSTS.get("longlivetheking", 0):
             return False
 
         if not get_empty_escape_corners(self):
@@ -1618,18 +1688,10 @@ class GameState:
                 return
             self.game_over = False
 
-        if "longlivetheking" in self.used_cards[self.turn]:
-            self.status_message = f"{self.turn.capitalize()} has already used LongLiveTheKing."
-            return
-
         piece = self.board[row][col]
 
-        if piece is None:
+        if piece is None or self.piece_color(piece) != self.turn:
             self.status_message = "Drop LongLiveTheKing on your king."
-            return
-
-        if self.piece_color(piece) != self.turn:
-            self.status_message = "You can only use LongLiveTheKing on your own king."
             return
 
         if piece.lower() != "k":
@@ -1642,11 +1704,13 @@ class GameState:
             self.status_message = "LongLiveTheKing failed: no empty corner exists."
             return
 
+        if not self.spend_card("longlivetheking"):
+            return
+
         from_row, from_col = row, col
         to_row, to_col = escape_corner
         king_piece = self.board[from_row][from_col]
 
-        self.save_history()
         add_animation("move_line", squares=[(from_row, from_col), (to_row, to_col)], color=(255, 235, 140), frames=40)
 
         # Move king to the random empty corner.
@@ -1674,26 +1738,9 @@ class GameState:
                 self.board[pawn_row][pawn_col] = pawn_piece
             spawned += 1
 
-        self.used_cards[self.turn].add("longlivetheking")
-
-        self.active_card = None
-        self.active_card_owner = None
-        self.selected = None
-        self.legal_moves_for_selected = []
-        self.windknight_square = None
-        self.windknight_moves_remaining = 0
-
-        # The escape consumes the turn.
-        self.award_check_bonus_for_player(self.turn)
-        self.decay_fire_tiles()
-        escaped_player = self.turn
-        self.pass_turn()
-        self.status_message = (
-            f"{escaped_player.capitalize()} escaped to a random corner "
-            f"and spawned {spawned} pawn(s)."
+        self.finish_card(
+            f"{{player}} escaped to a random corner and spawned {spawned} pawn(s)."
         )
-        self.start_turn_effects()
-        self.update_status()
 
 
     # -----------------------------
@@ -1703,7 +1750,7 @@ class GameState:
         if self.game_over:
             return
 
-        if not self.pay_for_game_card("switchero"):
+        if not self.spend_card("switchero"):
             return
 
         swapped = {
@@ -1746,13 +1793,13 @@ class GameState:
             self.white_right_rook_moved,
         )
 
-        self.consume_turn_after_game_card("{player} played Switchero. All piece ownership switched.")
+        self.finish_card("{player} played Switchero. All piece ownership switched.")
 
     def activate_prophecy(self):
         if self.game_over:
             return
 
-        if not self.pay_for_game_card("prophecy"):
+        if not self.spend_card("prophecy"):
             return
 
         changed = 0
@@ -1773,7 +1820,7 @@ class GameState:
         if changed_squares:
             add_animation("magic", squares=changed_squares, text="QUEEN", color=(255, 215, 80), frames=42)
 
-        self.consume_turn_after_game_card(
+        self.finish_card(
             f"{{player}} played The Prophecy. {changed} own pawn(s) became queen(s)."
         )
 
@@ -1781,7 +1828,7 @@ class GameState:
         if self.game_over:
             return
 
-        if not self.pay_for_game_card("armageddon"):
+        if not self.spend_card("armageddon"):
             return
 
         destroyed_value = 0
@@ -1834,7 +1881,7 @@ class GameState:
             self.add_fire_tiles(fire_squares)
             add_animation("blast", squares=fire_squares, text="METEOR", color=(255, 95, 35), frames=38)
 
-        self.consume_turn_after_game_card(
+        self.finish_card(
             f"{{player}} played Armageddon. Destroyed {destroyed_count} piece(s) and created fire."
         )
 
@@ -1842,7 +1889,7 @@ class GameState:
         if self.game_over:
             return
 
-        if not self.pay_for_game_card("thedramatic"):
+        if not self.spend_card("thedramatic"):
             return
 
         piece = self.board[row][col]
@@ -1865,7 +1912,7 @@ class GameState:
         self.dramatic_pieces.add((row, col))
         add_animation("magic", squares=[(row, col)], text="D!", color=(255, 230, 70), frames=38)
 
-        self.consume_turn_after_game_card(
+        self.finish_card(
             "{player} played TheDramatic. The marked piece will avenge itself if captured."
         )
 
@@ -1874,7 +1921,7 @@ class GameState:
         if self.game_over:
             return
 
-        if not self.pay_for_game_card("capitalism"):
+        if not self.spend_card("capitalism"):
             return
 
         my_squares = []
@@ -1891,12 +1938,12 @@ class GameState:
         if self.game_over:
             return
 
-        if not self.pay_for_game_card("plague"):
+        if not self.spend_card("plague"):
             return
 
         self.plague_active.add(self.turn)
 
-        self.consume_turn_after_game_card(
+        self.finish_card(
             "{player} unleashed Plague. At the start of their turns, one enemy piece dies."
         )
 
@@ -1908,7 +1955,7 @@ class GameState:
             self.status_message = "Solo only works if you have only your king left."
             return
 
-        if not self.pay_for_game_card("solo"):
+        if not self.spend_card("solo"):
             return
 
         king = self.find_king(self.turn)
@@ -1921,7 +1968,7 @@ class GameState:
         if self.game_over:
             return
 
-        if not self.pay_for_game_card("absoluteprotection"):
+        if not self.spend_card("absoluteprotection"):
             return
 
         self.absolute_protection_active.add(self.turn)
@@ -1933,7 +1980,7 @@ class GameState:
                     protected_squares.append((r, c))
         add_animation("shield", squares=protected_squares, text="SHIELD", color=(90, 210, 255), frames=40)
 
-        self.consume_turn_after_game_card(
+        self.finish_card(
             "{player} activated AbsoluteProtection for one opponent turn."
         )
 
@@ -1942,31 +1989,21 @@ class GameState:
         if self.game_over:
             return
 
+        # Needs 3 prior snapshots; spend_card adds one more, so require 3 now.
         if len(self.history) < 3:
             self.status_message = "TimeTraveler needs at least 3 previous turns."
             return
 
-        if not self.pay_for_game_card("timetraveler"):
-            return
-
-        # pay_for_game_card saved the current state, so go back to the
-        # third state before this payment snapshot.
-        if len(self.history) < 4:
-            self.ether[self.turn] += CARD_COSTS["timetraveler"]
-            self.status_message = "TimeTraveler needs more history."
+        if not self.spend_card("timetraveler"):
             return
 
         snapshot = copy.deepcopy(self.history[-4])
-        # Only the piece positions rewind - Ether, used cards and every active
-        # power are kept as they are now.
+        # Only the piece positions rewind - Ether, cards and every active power
+        # are kept as they are now.
         self.restore_snapshot(snapshot, positions_only=True)
         self.history = self.history[:-4]
         add_animation("magic", squares=[(r, c) for r in range(8) for c in range(8)], text="TIME", color=(120, 190, 255), frames=55)
-        self.status_message = "TimeTraveler rewound the pieces 3 turns. Ether and powers are kept."
-        self.decay_fire_tiles()
-        self.pass_turn()
-        self.start_turn_effects()
-        self.update_status()
+        self.finish_card("{player} rewound the pieces 3 turns. Ether and powers are kept.")
 
     def activate_extrablood(self):
         if self.game_over:
@@ -1976,12 +2013,12 @@ class GameState:
             self.status_message = "ExtraBlood is already active for you."
             return
 
-        if not self.pay_for_game_card("extrablood"):
+        if not self.spend_card("extrablood"):
             return
 
         self.extra_blood_active.add(self.turn)
         add_animation("banner", text=f"{self.turn.capitalize()} activated ExtraBlood", color=(220, 30, 30), frames=50)
-        self.consume_turn_after_game_card("{player} activated ExtraBlood. Capture Ether is now doubled.")
+        self.finish_card("{player} activated ExtraBlood. Capture Ether is now doubled.")
 
     def activate_chrisma(self):
         if self.game_over:
@@ -1993,7 +2030,7 @@ class GameState:
             self.status_message = "Chrisma failed: no king found."
             return
 
-        if not self.pay_for_game_card("chrisma"):
+        if not self.spend_card("chrisma"):
             return
 
         kr, kc = king_pos
@@ -2030,12 +2067,16 @@ class GameState:
 
         self.add_ether(self.turn, gained)
         add_animation("magic", squares=affected or [king_pos], text="CHARM", color=(255, 120, 220), frames=48)
-        self.consume_turn_after_game_card(
+        self.finish_card(
             f"{{player}} used Chrisma. Converted {converted} piece(s) and gained {gained} Ether."
         )
 
     def activate_inzone_on_square(self, row, col):
         if self.game_over:
+            return
+
+        if self.moves_made_this_turn >= self.moves_allowed():
+            self.status_message = "No moves left this turn. Press END TURN."
             return
 
         piece = self.board[row][col]
@@ -2062,7 +2103,7 @@ class GameState:
             self.status_message = "That piece has no captures for InZone."
             return
 
-        if not self.pay_for_game_card("inzone"):
+        if not self.spend_card("inzone"):
             return
 
         self.active_card = "inzone"
@@ -2098,7 +2139,7 @@ class GameState:
             self.status_message = "Nope has nothing to cancel."
             return
 
-        if not self.pay_for_game_card("nope"):
+        if not self.spend_card("nope"):
             return
 
         notes = []
@@ -2125,13 +2166,13 @@ class GameState:
                 notes.append("destroyed the checking piece")
 
         summary = " and ".join(notes) if notes else "fizzled"
-        self.consume_turn_after_game_card(f"{{player}} played Nope: {summary}.")
+        self.finish_card(f"{{player}} played Nope: {summary}.")
 
     def activate_communism(self):
         if self.game_over:
             return
 
-        if not self.pay_for_game_card("communism"):
+        if not self.spend_card("communism"):
             return
 
         total = self.ether[WHITE] + self.ether[BLACK]
@@ -2140,7 +2181,7 @@ class GameState:
         self.ether[self.enemy_color(self.turn)] = half
         self.ether[self.turn] = total - half
         add_animation("banner", text="COMMUNISM", color=(220, 60, 60), frames=44)
-        self.consume_turn_after_game_card("{player} played Communism. Ether is now shared equally.")
+        self.finish_card("{player} played Communism. Ether is now shared equally.")
 
     def activate_gambit_on_square(self, row, col):
         if self.game_over:
@@ -2160,7 +2201,7 @@ class GameState:
             self.status_message = "Gambit cannot sacrifice the king."
             return
 
-        if not self.pay_for_game_card("gambit"):
+        if not self.spend_card("gambit"):
             return
 
         value = self.get_piece_value(piece) * 2
@@ -2174,7 +2215,7 @@ class GameState:
         self.add_ether(self.turn, value)
         add_animation("burst", squares=[(row, col)], text="GAMBIT", color=(200, 150, 60), frames=34)
         add_animation("coin", squares=[(row, col)], text=f"+{value}", color=(255, 220, 90), frames=40)
-        self.consume_turn_after_game_card(f"{{player}} sacrificed a piece for {value} Ether.")
+        self.finish_card(f"{{player}} sacrificed a piece for {value} Ether.")
 
     def activate_propaganda(self):
         if self.game_over:
@@ -2184,12 +2225,12 @@ class GameState:
             self.status_message = "Propaganda is already active for you."
             return
 
-        if not self.pay_for_game_card("propaganda"):
+        if not self.spend_card("propaganda"):
             return
 
         self.propaganda_active.add(self.turn)
         add_animation("banner", text="PROPAGANDA", color=(210, 130, 255), frames=46)
-        self.consume_turn_after_game_card("{player} spread Propaganda. Each turn may convert an enemy piece.")
+        self.finish_card("{player} spread Propaganda. Each turn may convert an enemy piece.")
 
     def activate_ifeelsafe(self):
         if self.game_over:
@@ -2199,12 +2240,12 @@ class GameState:
             self.status_message = "I Feel Safe is already active for you."
             return
 
-        if not self.pay_for_game_card("ifeelsafe"):
+        if not self.spend_card("ifeelsafe"):
             return
 
         self.ifeelsafe_active.add(self.turn)
         add_animation("banner", text="I FEEL SAFE", color=(90, 210, 255), frames=46)
-        self.consume_turn_after_game_card(
+        self.finish_card(
             "{player} feels safe. End of turn: +3 Ether per piece by the king."
         )
 
@@ -2212,12 +2253,12 @@ class GameState:
         if self.game_over:
             return
 
-        if not self.pay_for_game_card("iguess"):
+        if not self.spend_card("iguess"):
             return
 
         self.bonus_turns[self.turn] += 2
         add_animation("banner", text="I GUESS  +2 MOVES", color=(150, 220, 150), frames=50)
-        self.consume_turn_after_game_card(
+        self.finish_card(
             "{player} played I Guess. They now take 2 extra moves every turn."
         )
 
@@ -2639,11 +2680,7 @@ class GameState:
             self.en_passant_target = (middle_row, from_col)
 
         if not test_mode:
-            if self.active_card == "pawntastic":
-                self.used_cards[color].add("pawntastic")
-
             if self.active_card == "queentum":
-                self.used_cards[color].add("queentum")
                 add_animation("teleport", frames=34, extra={
                     "from": original_from_square,
                     "to": original_to_square,
@@ -2713,17 +2750,7 @@ class GameState:
                     self.dramatic_pieces.discard((to_row, to_col))
                     add_animation("burst", squares=[(to_row, to_col)], text="BURNOUT", color=(255, 60, 60), frames=38)
 
-                self.active_card = None
-                self.active_card_owner = None
-                self.inzone_square = None
-                self.inzone_captures = 0
-                self.award_check_bonus_for_player(color)
-                self.decay_fire_tiles()
-                self.pass_turn()
-                self.selected = None
-                self.legal_moves_for_selected = []
-                self.start_turn_effects()
-                self.update_status()
+                self.finish_chess_move()
                 return
 
             if was_windknight_move and moved_piece_survived:
@@ -2738,27 +2765,10 @@ class GameState:
                         self.status_message = "Windknight: move the same knight one more time."
                         return
 
-                self.active_card = None
-                self.active_card_owner = None
-                self.windknight_square = None
-                self.windknight_moves_remaining = 0
-                self.decay_fire_tiles()
-                self.pass_turn()
-                self.selected = None
-                self.legal_moves_for_selected = []
-                self.start_turn_effects()
-                self.update_status()
+                self.finish_chess_move()
                 return
 
-            self.award_check_bonus_for_player(color)
-            self.decay_fire_tiles()
-            self.active_card = None
-            self.active_card_owner = None
-            self.pass_turn()
-            self.selected = None
-            self.legal_moves_for_selected = []
-            self.start_turn_effects()
-            self.update_status()
+            self.finish_chess_move()
 
     def update_castling_rights_for_move(self, from_row, from_col, piece):
         piece_type = piece.lower()
@@ -2847,6 +2857,10 @@ class GameState:
 
         if self.selected is not None:
             if (row, col) in self.legal_moves_for_selected:
+                # A plain chess move is limited to the moves allowed this turn.
+                if self.active_card is None and self.moves_made_this_turn >= self.moves_allowed():
+                    self.status_message = "No moves left this turn. Press END TURN."
+                    return
                 self.make_move(self.selected, (row, col))
                 return
 
@@ -2899,21 +2913,31 @@ def board_to_screen(row, col):
 
 
 def get_card_rects():
+    # The current player's hand, fanned in a shallow arc and centered between
+    # the side buttons. Cards overlap only if the hand is unusually large.
     rects = {}
+    hand = game.hand[game.turn]
+    n = len(hand)
+    if n == 0:
+        return rects
 
-    # Cards fill each panel column by column at their native size.
-    for index, card_name in enumerate(PIECE_POWER_CARDS):
-        grid_col = index // CARD_ROWS_FIT
-        grid_row = index % CARD_ROWS_FIT
-        x = LEFT_PANEL_X + PANEL_PAD + grid_col * (CARD_WIDTH + PANEL_PAD)
-        y = CARD_TOP + grid_row * (CARD_HEIGHT + CARD_GAP)
-        rects[card_name] = pygame.Rect(x, y, CARD_WIDTH, CARD_HEIGHT)
+    avail = SCREEN_WIDTH - 2 * (SIDE_MARGIN + ACTION_BTN_W + PANEL_PAD)
+    spacing = CARD_WIDTH + PANEL_PAD
+    if n > 1 and n * spacing > avail:
+        spacing = max(CARD_WIDTH // 3, (avail - CARD_WIDTH) // (n - 1))
 
-    for index, card_name in enumerate(GENERAL_CARDS):
-        grid_col = index // CARD_ROWS_FIT
-        grid_row = index % CARD_ROWS_FIT
-        x = RIGHT_PANEL_X + PANEL_PAD + grid_col * (CARD_WIDTH + PANEL_PAD)
-        y = CARD_TOP + grid_row * (CARD_HEIGHT + CARD_GAP)
+    total = CARD_WIDTH + (n - 1) * spacing
+    start_x = (SCREEN_WIDTH - total) // 2
+    # Cards hang from the bottom of the screen and the middle ones rise highest.
+    bottom = SCREEN_HEIGHT - CARD_GAP
+    center = (n - 1) / 2
+    max_off = max(1.0, center)
+
+    for index, card_name in enumerate(hand):
+        off = index - center
+        x = start_x + index * spacing
+        lift = ARC_LIFT * (1 - (off / max_off) ** 2)  # middle rises highest
+        y = int(bottom - lift - CARD_HEIGHT)
         rects[card_name] = pygame.Rect(x, y, CARD_WIDTH, CARD_HEIGHT)
 
     return rects
@@ -3267,12 +3291,20 @@ def get_card_bob(card_name):
 
 
 def draw_single_card(rect, owner, card_name):
-    used = card_name in game.used_cards[owner] if card_name in ABILITY_CARDS else False
+    # Cards in hand are always playable (no "used" state in the deck system).
+    used = False
     display_name, _, _ = CARD_INFO.get(card_name, (card_name, (70, 70, 70), ""))
     affordable = game.ether[game.turn] >= CARD_COSTS.get(card_name, 0)
 
     rect = rect.move(0, get_card_bob(card_name))
     screen.blit(get_card_face(owner, card_name, rect.size, used, affordable), rect)
+
+    # Dim and red-mark cards selected for discard.
+    if card_name in game.discard_marks:
+        mark = pygame.Surface(rect.size, pygame.SRCALPHA)
+        mark.fill((180, 30, 30, 90))
+        screen.blit(mark, rect)
+        pygame.draw.rect(screen, (240, 80, 80), rect, 3, border_radius=8)
 
     strip_h = max(18, rect.height // 8)
     name_text = clip_text(badge_font, display_name, rect.width - 6)
@@ -3339,26 +3371,19 @@ def wrap_text(text, font_obj, max_width):
 def draw_card_preview(owner, card_name, card_rect):
     display_name, _, description = CARD_INFO.get(card_name, (card_name, (70, 70, 70), ""))
     cost = CARD_COSTS.get(card_name, 0)
-    used = card_name in game.used_cards[owner] if card_name in ABILITY_CARDS else False
+    used = False
 
-    # The preview shows the card at native size (never resized); it exists
-    # for the description box underneath.
-    preview_h = CARD_HEIGHT
-    preview_w = CARD_WIDTH
+    # A large preview, floated above the hovered card in the tray.
+    preview_w = 200
+    preview_h = int(preview_w * CARD_ASPECT)
     info_h = 92
     pad = 10
     total_h = preview_h + info_h + pad * 3
 
-    # Show the preview next to the panel the card lives in, over the table.
-    if card_rect.centerx < SCREEN_WIDTH // 2:
-        panel_x = LEFT_PANEL_WIDTH + 16
-    else:
-        panel_x = RIGHT_PANEL_X - preview_w - pad * 2 - 16
-
-    panel_y = min(
-        max(SIDE_MARGIN, card_rect.centery - total_h // 2),
-        SCREEN_HEIGHT - INFO_HEIGHT - total_h - 8,
-    )
+    # Centered over the card, clamped to the screen, sitting above the tray.
+    panel_x = min(max(SIDE_MARGIN, card_rect.centerx - (preview_w + pad * 2) // 2),
+                  SCREEN_WIDTH - preview_w - pad * 2 - SIDE_MARGIN)
+    panel_y = max(SIDE_MARGIN, TRAY_Y - total_h - 8)
 
     panel = pygame.Rect(panel_x, panel_y, preview_w + pad * 2, total_h)
     shadow = pygame.Surface((panel.width + 16, panel.height + 16), pygame.SRCALPHA)
@@ -3394,21 +3419,40 @@ def draw_card_preview(owner, card_name, card_rect):
         line_y += 18
 
 
-def draw_sidebar():
-    # The cards sit directly on the animated background - no panel fill.
-    # Header plaques.
-    left_header = pygame.Rect(8, 10, LEFT_PANEL_WIDTH - 16, HEADER_H - 12)
-    right_header = pygame.Rect(RIGHT_PANEL_X + 8, 10, RIGHT_PANEL_WIDTH - 16, HEADER_H - 12)
+def get_action_buttons():
+    # Discard on the left of the hand, End Turn on the right.
+    bw, bh = ACTION_BTN_W, 60
+    cy = TRAY_Y + TRAY_HEIGHT // 2
+    discard = pygame.Rect(SIDE_MARGIN, cy - bh // 2, bw, bh)
+    end_turn = pygame.Rect(SCREEN_WIDTH - SIDE_MARGIN - bw, cy - bh // 2, bw, bh)
+    return {"discard": discard, "end_turn": end_turn}
 
-    for plaque, title in [
-        (left_header, "PIECE POWERS"),
-        (right_header, "POWER CARDS"),
-    ]:
-        pygame.draw.rect(screen, WOOD_FRAME_DARK, plaque, border_radius=8)
-        pygame.draw.rect(screen, WOOD_FRAME, plaque, 2, border_radius=8)
-        title_x = plaque.centerx - badge_font.size(title)[0] // 2
-        title_y = plaque.centery - badge_font.get_height() // 2
-        draw_wavy_text(badge_font, title, PARCHMENT, (title_x, title_y), amp=2)
+
+def draw_sidebar():
+    # The hand sits directly on the game background - no tray panel behind it,
+    # and the cards are large enough to overlap the board's lower edge.
+
+    # Discard (left) and End Turn (right) buttons, with pile/deck counts below.
+    n_marked = sum(1 for c in game.hand[game.turn] if c in game.discard_marks)
+    buttons = get_action_buttons()
+    mouse_pos = pygame.mouse.get_pos()
+    meta = {
+        "discard": (f"DISCARD {n_marked}" if n_marked else "DISCARD",
+                    (210, 110, 70) if n_marked else (110, 100, 110),
+                    f"Pile {len(game.discard[game.turn])}"),
+        "end_turn": ("END TURN", (90, 200, 120), f"Deck {len(game.deck[game.turn])}"),
+    }
+    for key, brect in buttons.items():
+        label, color, sub = meta[key]
+        hot = brect.collidepoint(mouse_pos)
+        fill = pygame.Surface(brect.size, pygame.SRCALPHA)
+        fill.fill((*color, 75 if hot else 38))
+        screen.blit(fill, brect)
+        pygame.draw.rect(screen, color, brect, 3 if hot else 2, border_radius=10)
+        lx = brect.centerx - badge_font.size(label)[0] // 2
+        draw_shadow_text(badge_font, label, color, (lx, brect.centery - badge_font.get_height() // 2), offset=1)
+        sx = brect.centerx - tiny_font.size(sub)[0] // 2
+        draw_shadow_text(tiny_font, sub, MUTED_TEXT, (sx, brect.bottom + 4), offset=1)
 
     card_rects = get_card_rects()
     mouse_pos = pygame.mouse.get_pos()
@@ -3423,9 +3467,10 @@ def draw_sidebar():
         if rect.collidepoint(mouse_pos):
             hovered = card_name
 
-    # Highlight the hovered card and show a large readable preview beside
-    # the panel.
+    # Redraw the hovered card on top (cards can overlap), outline it, and float
+    # a large readable preview above it.
     if hovered is not None and dragging_card is None:
+        draw_single_card(card_rects[hovered], game.turn, hovered)
         outline = card_rects[hovered].move(0, get_card_bob(hovered)).inflate(6, 6)
         pygame.draw.rect(screen, (255, 220, 110), outline, 3, border_radius=10)
         draw_card_preview(game.turn, hovered, card_rects[hovered])
@@ -3494,16 +3539,16 @@ def render_clipped(font_obj, text, color, max_width):
 
 
 def draw_ether_chip(label, amount, color, is_active, topleft):
-    chip = pygame.Rect(topleft[0], topleft[1], 168, 26)
-    pygame.draw.rect(screen, WOOD_FRAME_DARK, chip, border_radius=13)
-    pygame.draw.rect(screen, GOLD if is_active else (80, 70, 55), chip, 2, border_radius=13)
+    chip = pygame.Rect(topleft[0], topleft[1], 224, 32)
+    pygame.draw.rect(screen, WOOD_FRAME_DARK, chip, border_radius=16)
+    pygame.draw.rect(screen, GOLD if is_active else (80, 70, 55), chip, 2, border_radius=16)
 
-    pygame.draw.circle(screen, color, (chip.x + 14, chip.centery), 7)
-    pygame.draw.circle(screen, (90, 80, 60), (chip.x + 14, chip.centery), 7, 1)
+    pygame.draw.circle(screen, color, (chip.x + 18, chip.centery), 9)
+    pygame.draw.circle(screen, (90, 80, 60), (chip.x + 18, chip.centery), 9, 1)
 
     text = f"{label}  {amount} Ether"
     text_color = TEXT_COLOR if is_active else MUTED_TEXT
-    draw_shadow_text(tiny_font, text, text_color, (chip.x + 27, chip.centery - tiny_font.get_height() // 2), offset=1)
+    draw_shadow_text(tiny_font, text, text_color, (chip.x + 34, chip.centery - tiny_font.get_height() // 2), offset=1)
 
 
 def draw_info_panel():
@@ -3516,14 +3561,14 @@ def draw_info_panel():
     elif game.active_card == "inzone":
         card_text = "InZone active: keep capturing with the selected piece."
     else:
-        card_text = "Drag a card onto the board to use it. Click instant cards. Click a USED card to refill it."
+        card_text = "Play cards (afford-gated), then move a piece or END TURN. Right-click cards to mark, DISCARD to redraw."
 
-    bar = pygame.Rect(LEFT_PANEL_WIDTH, INFO_Y, SCREEN_WIDTH - LEFT_PANEL_WIDTH - RIGHT_PANEL_WIDTH, INFO_HEIGHT)
+    bar = pygame.Rect(0, INFO_Y, SCREEN_WIDTH, INFO_HEIGHT)
     pygame.draw.rect(screen, PANEL_BG, bar)
     pygame.draw.line(screen, PANEL_EDGE, (bar.x, bar.y), (bar.right, bar.y), 3)
 
-    chips_w = 190
-    text_w = bar.width - chips_w - 28
+    chips_w = 250
+    text_w = bar.width - chips_w - 44
 
     if game.winner_message is not None:
         headline = f"GAME OVER - {game.winner_message}"
@@ -3534,7 +3579,7 @@ def draw_info_panel():
     draw_wavy_text(title_font, clip_text(title_font, headline, text_w), GOLD, (x, bar.y + 8), amp=2, offset=3)
 
     if game.cheat_mode:
-        draw_badge("CHEAT MODE   C: off   T: pass turn", GOLD, (bar.x + 16, bar.y - 26))
+        draw_badge("CHEAT MODE   C: off   T: pass turn", GOLD, (bar.x + 16, bar.bottom + 6))
 
     active_flags = []
     if game.plague_active:
@@ -3544,31 +3589,20 @@ def draw_info_panel():
     if game.extra_blood_active:
         active_flags.append("ExtraBlood")
 
-    if active_flags:
-        third_line = ("Active effects: " + ", ".join(active_flags), GOLD)
-    else:
-        third_line = (
-            "+1 Ether per square moved  -  captures pay piece value  -  check pays +5  -  R restarts",
-            MUTED_TEXT,
-        )
-
-    lines = [
-        (card_text, MUTED_TEXT),
-        third_line,
-    ]
-
-    # Don't repeat the headline ("White to move") as the status line.
+    # One status line that fits the thin bar: prefer the latest message, else
+    # the active-card hint, else any running effects.
     if game.status_message and game.status_message != headline:
-        lines.insert(0, (game.status_message, TEXT_COLOR))
+        status_line, status_color = game.status_message, TEXT_COLOR
+    elif active_flags:
+        status_line, status_color = "Active effects: " + ", ".join(active_flags), GOLD
+    else:
+        status_line, status_color = card_text, MUTED_TEXT
 
-    y = bar.y + 40
-    for text, color in lines:
-        draw_shadow_text(tiny_font, clip_text(tiny_font, text, text_w), color, (x, y))
-        y += 21
+    draw_shadow_text(tiny_font, clip_text(tiny_font, status_line, text_w), status_color, (x, bar.y + 60))
 
     # Ether totals on the right; the side to move is highlighted.
     chips_x = bar.right - chips_w
-    draw_ether_chip("White", game.ether[WHITE], (240, 240, 235), game.turn == WHITE, (chips_x, bar.y + 18))
+    draw_ether_chip("White", game.ether[WHITE], (240, 240, 235), game.turn == WHITE, (chips_x, bar.y + 14))
     draw_ether_chip("Black", game.ether[BLACK], (30, 28, 26), game.turn == BLACK, (chips_x, bar.y + 52))
 
 
@@ -3609,6 +3643,50 @@ MENU_GREEN = (96, 230, 136)
 app_state = "menu"  # "menu" | "playing" | "catalog" | "settings"
 menu_selected = 0
 
+# Smooth fade-to-black transition between screens. progress runs 0 -> 1; the
+# screen switches at the half-way point (fully black), so it fades out then in.
+TRANSITION_STEP = 0.6
+_transition = {"active": False, "progress": 0.0, "target": None, "switched": False, "on_switch": None}
+
+
+def request_transition(target, on_switch=None):
+    if _transition["active"] or target == app_state:
+        return
+    _transition.update(active=True, progress=0.0, target=target, switched=False, on_switch=on_switch)
+
+
+def update_transition():
+    global app_state
+    if not _transition["active"]:
+        return
+    _transition["progress"] += TRANSITION_STEP
+    if _transition["progress"] >= 0.5 and not _transition["switched"]:
+        if _transition["on_switch"]:
+            _transition["on_switch"]()
+        app_state = _transition["target"]
+        _transition["switched"] = True
+    if _transition["progress"] >= 1.0:
+        _transition["active"] = False
+
+
+def draw_transition_overlay():
+    if not _transition["active"]:
+        return
+    alpha = int(255 * (1 - abs(_transition["progress"] - 0.5) * 2))
+    if alpha <= 0:
+        return
+    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+    overlay.fill((0, 0, 0))
+    overlay.set_alpha(alpha)
+    screen.blit(overlay, (0, 0))
+
+
+def start_new_game():
+    global game, dragging_card, dragging_piece
+    game = GameState()
+    dragging_card = None
+    dragging_piece = None
+
 MENU_ITEMS = [
     {"label": "START", "action": "start", "icon": "pawn", "key": "enter", "accent": MENU_CYAN},
     {"label": "CATALOG", "action": "catalog", "icon": "club", "key": "C", "accent": MENU_PINK},
@@ -3618,12 +3696,13 @@ MENU_ITEMS = [
 
 
 def draw_menu_background():
-    screen.fill(MENU_BG1)
-    tile = 44
-    for gy in range(0, SCREEN_HEIGHT, tile):
-        for gx in range(0, SCREEN_WIDTH, tile):
-            if (gx // tile + gy // tile) % 2 == 0:
-                pygame.draw.rect(screen, MENU_BG2, (gx, gy, tile, tile))
+    # Same galaxy background and drifting cards as the gameplay screen, so the
+    # menus and the game share one look.
+    if BACKGROUND_IMAGE is not None:
+        screen.blit(BACKGROUND_IMAGE, (0, 0))
+    else:
+        screen.fill(MENU_BG1)
+    draw_floating_cards()
 
 
 def draw_icon(kind, cx, cy, s, color):
@@ -3707,10 +3786,10 @@ def draw_glow_title(text, color, center):
 
 
 def get_menu_rects():
-    bw = int(min(560, SCREEN_WIDTH * 0.42))
-    bh = max(54, int(SCREEN_HEIGHT * 0.075))
-    gap = max(12, int(SCREEN_HEIGHT * 0.022))
-    top = int(SCREEN_HEIGHT * 0.40)
+    bw = int(min(640, SCREEN_WIDTH * 0.44))
+    bh = max(72, int(SCREEN_HEIGHT * 0.092))
+    gap = max(14, int(SCREEN_HEIGHT * 0.024))
+    top = int(SCREEN_HEIGHT * 0.42)
     x = (SCREEN_WIDTH - bw) // 2
     return [pygame.Rect(x, top + i * (bh + gap), bw, bh) for i in range(len(MENU_ITEMS))]
 
@@ -3723,17 +3802,17 @@ def draw_start_screen():
     draw_menu_background()
 
     # Decorative neon cards.
-    draw_neon_card(SCREEN_WIDTH - 110, int(SCREEN_HEIGHT * 0.26), MENU_CYAN, "spade")
-    draw_neon_card(SCREEN_WIDTH - 150, int(SCREEN_HEIGHT * 0.62), MENU_PINK, "heart")
+    #draw_neon_card(SCREEN_WIDTH - 110, int(SCREEN_HEIGHT * 0.26), MENU_CYAN, "spade")
+    #draw_neon_card(SCREEN_WIDTH - 150, int(SCREEN_HEIGHT * 0.62), MENU_PINK, "heart")
 
     # Title: CHESS (white) + BYTE (teal), with a cyan halo.
-    chess = menu_title_font.render("CHESS", True, MENU_WHITE)
-    byte = menu_title_font.render("BYTE", True, MENU_CYAN)
+    chess = home_title_font.render("CHESS", True, MENU_WHITE)
+    byte = home_title_font.render("BYTE", True, MENU_CYAN)
     total_w = chess.get_width() + byte.get_width()
     tx = (SCREEN_WIDTH - total_w) // 2
-    ty = int(SCREEN_HEIGHT * 0.10)
-    halo = menu_title_font.render("CHESSBYTE", True, MENU_CYAN)
-    for ox, oy in ((-3, 0), (3, 0), (0, -3), (0, 3)):
+    ty = int(SCREEN_HEIGHT * 0.06)
+    halo = home_title_font.render("CHESSBYTE", True, MENU_CYAN)
+    for ox, oy in ((-4, 0), (4, 0), (0, -4), (0, 4)):
         ghost = halo.copy()
         ghost.set_alpha(55)
         screen.blit(ghost, (tx + ox, ty + oy))
@@ -3741,31 +3820,36 @@ def draw_start_screen():
     screen.blit(byte, (tx + chess.get_width(), ty))
 
     # Subtitle with a small diamond separator.
-    left = small_font.render("ROGUELIKE", True, MENU_PINK)
-    right = small_font.render("POWER-UP CHESS", True, MENU_PINK)
+    #left = small_font.render("ROGUELIKE", True, MENU_PINK)
+    #right = small_font.render("POWER-UP CHESS", True, MENU_PINK)
     gap = 34
-    sub_w = left.get_width() + gap + right.get_width()
-    sx = (SCREEN_WIDTH - sub_w) // 2
+    #sub_w = left.get_width() + gap + right.get_width()
+    #sx = (SCREEN_WIDTH - sub_w) // 2
     sy = ty + chess.get_height() + 12
-    screen.blit(left, (sx, sy))
-    screen.blit(right, (sx + left.get_width() + gap, sy))
-    dcx = sx + left.get_width() + gap // 2
-    dcy = sy + left.get_height() // 2
-    pygame.draw.polygon(screen, MENU_PINK, [(dcx, dcy - 4), (dcx + 4, dcy), (dcx, dcy + 4), (dcx - 4, dcy)])
+    #screen.blit(left, (sx, sy))
+    #screen.blit(right, (sx + left.get_width() + gap, sy))
+    #dcx = sx + left.get_width() + gap // 2
+    #dcy = sy + left.get_height() // 2
+    #pygame.draw.polygon(screen, MENU_PINK, [(dcx, dcy - 4), (dcx + 4, dcy), (dcx, dcy + 4), (dcx - 4, dcy)])
 
-    # Menu buttons.
+    # Menu buttons: chunky black Balatro-style buttons with big white labels.
     for i, (item, rect) in enumerate(zip(MENU_ITEMS, get_menu_rects())):
         selected = i == menu_selected
-        accent = item["accent"]
-        fill = pygame.Surface(rect.size, pygame.SRCALPHA)
-        pygame.draw.rect(fill, (*accent, 55 if selected else 26), fill.get_rect(), border_radius=12)
-        screen.blit(fill, rect)
-        pygame.draw.rect(screen, accent, rect, 3 if selected else 2, border_radius=12)
-        draw_icon(item["icon"], rect.x + 36, rect.centery, 22, accent)
-        label_color = MENU_WHITE if selected else (200, 205, 220)
-        label = menu_font.render(item["label"], True, label_color)
-        screen.blit(label, (rect.x + 70, rect.centery - label.get_height() // 2))
-        draw_key_badge((rect.right - 28, rect.centery), item["key"], MENU_MUTED)
+
+        # Chunky 3D bottom edge.
+        pygame.draw.rect(screen, (0, 0, 0), rect.move(0, 7), border_radius=16)
+        face = (26, 26, 34) if selected else (8, 8, 12)
+        pygame.draw.rect(screen, face, rect, border_radius=16)
+        border = (255, 255, 255) if selected else (95, 95, 115)
+        pygame.draw.rect(screen, border, rect, 4 if selected else 2, border_radius=16)
+
+        label = item["label"]
+        lx = rect.centerx - menu_option_font.size(label)[0] // 2
+        ly = rect.centery - menu_option_font.get_height() // 2
+        if selected:
+            draw_wavy_text(menu_option_font, label, (255, 255, 255), (lx, ly), amp=3, offset=3)
+        else:
+            draw_shadow_text(menu_option_font, label, (236, 236, 246), (lx, ly), offset=3)
 
     # Footer.
     draw_shadow_text(small_font, "BUILD 0x8B - v0.8.1", MENU_MUTED, (40, SCREEN_HEIGHT - 44))
@@ -3832,16 +3916,13 @@ def draw_settings_screen():
 
 
 def menu_activate(action):
-    global app_state, running, game, dragging_card, dragging_piece
+    global running
     if action == "start":
-        game = GameState()
-        dragging_card = None
-        dragging_piece = None
-        app_state = "playing"
+        request_transition("playing", on_switch=start_new_game)
     elif action == "catalog":
-        app_state = "catalog"
+        request_transition("catalog")
     elif action == "settings":
-        app_state = "settings"
+        request_transition("settings")
     elif action == "exit":
         running = False
 
@@ -3877,25 +3958,25 @@ def handle_menu_events(events):
 
 
 def handle_catalog_events(events):
-    global app_state, running
+    global running
     for event in events:
         if event.type == pygame.QUIT:
             running = False
         elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
-            app_state = "menu"
+            request_transition("menu")
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            app_state = "menu"
+            request_transition("menu")
 
 
 def handle_settings_events(events):
-    global app_state, running, music_muted, white_skin_index, black_skin_index
+    global running, music_muted, white_skin_index, black_skin_index
     global current_board_index, BOARD_IMAGE, BOARD_IMAGE_OX, BOARD_IMAGE_OY, LIGHT_SQUARE, DARK_SQUARE
     for event in events:
         if event.type == pygame.QUIT:
             running = False
         elif event.type == pygame.KEYDOWN:
             if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
-                app_state = "menu"
+                request_transition("menu")
             elif event.key == pygame.K_m and _audio_ok:
                 music_muted = not music_muted
                 pygame.mixer.music.set_volume(0.0 if music_muted else 0.5)
@@ -3918,18 +3999,32 @@ music_muted = False
 running = True
 
 while running:
+    update_transition()
+    # Input is ignored mid-fade so a screen can't be acted on while changing.
+    blocked = _transition["active"]
+
     # Menu / catalog / settings run as their own self-contained frames.
     if app_state != "playing":
         events = pygame.event.get()
-        if app_state == "menu":
+        if blocked:
+            for event in events:
+                if event.type == pygame.QUIT:
+                    running = False
+        elif app_state == "menu":
             handle_menu_events(events)
-            draw_start_screen()
         elif app_state == "catalog":
             handle_catalog_events(events)
-            draw_catalog_screen()
         elif app_state == "settings":
             handle_settings_events(events)
+
+        if app_state == "menu":
+            draw_start_screen()
+        elif app_state == "catalog":
+            draw_catalog_screen()
+        elif app_state == "settings":
             draw_settings_screen()
+
+        draw_transition_overlay()
         display.fill((0, 0, 0))
         display.blit(screen, (0, 0))
         pygame.display.flip()
@@ -3939,10 +4034,13 @@ while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
+            continue
+        if blocked:
+            continue  # ignore input mid-fade (events still pumped)
 
-        elif event.type == pygame.KEYDOWN:
+        if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
-                app_state = "menu"
+                request_transition("menu")
 
             elif event.key == pygame.K_r:
                 game = GameState()
@@ -3983,9 +4081,35 @@ while running:
                 game.start_turn_effects()
                 game.update_status()
 
+            elif event.key == pygame.K_SPACE:
+                game.end_turn()
+
         elif event.type == pygame.MOUSEBUTTONDOWN:
             mouse_pos = event.pos
             card_rects = get_card_rects()
+
+            # Right-click toggles a card's discard mark.
+            if event.button == 3:
+                for card_name, rect in card_rects.items():
+                    if rect.collidepoint(mouse_pos):
+                        if card_name in game.discard_marks:
+                            game.discard_marks.discard(card_name)
+                        else:
+                            game.discard_marks.add(card_name)
+                        break
+                continue
+
+            # End Turn / Discard buttons.
+            buttons = get_action_buttons()
+            if buttons["end_turn"].collidepoint(mouse_pos):
+                game.end_turn()
+                continue
+            if buttons["discard"].collidepoint(mouse_pos):
+                if any(c in game.discard_marks for c in game.hand[game.turn]):
+                    game.end_turn(discard_marked=True)
+                else:
+                    game.status_message = "Right-click cards to mark them, then Discard."
+                continue
 
             clicked_card = None
 
@@ -3994,10 +4118,7 @@ while running:
                     clicked_card = card_name
 
             if clicked_card is not None:
-                if clicked_card in ABILITY_CARDS and clicked_card in game.used_cards[game.turn]:
-                    game.refill_card(clicked_card)
-
-                elif game.active_card is not None:
+                if game.active_card is not None:
                     game.status_message = "Finish the active card move first."
 
                 elif clicked_card == "switchero":
@@ -4170,6 +4291,8 @@ while running:
             gloom = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
             gloom.fill((0, 0, 0, veil))
             screen.blit(gloom, (0, 0))
+
+    draw_transition_overlay()
 
     # Present the frame, offset by the shake (black shows at the bared edges).
     display.fill((0, 0, 0))
