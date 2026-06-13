@@ -14,6 +14,26 @@ from cards.longlivetheking import choose_random_escape_corner, get_empty_escape_
 
 pygame.init()
 
+# Audio is optional: a machine without a sound device (or a headless test
+# run) should still launch the game, just silently.
+try:
+    pygame.mixer.init()
+    _audio_ok = True
+except pygame.error:
+    _audio_ok = False
+
+
+def start_music():
+    if not _audio_ok:
+        return
+    try:
+        pygame.mixer.music.load(os.path.join("assets", "music.mp3"))
+        pygame.mixer.music.set_volume(0.5)
+        pygame.mixer.music.play(-1)  # loop forever
+    except pygame.error:
+        pass
+
+
 # -----------------------------
 # Window / board settings
 # -----------------------------
@@ -24,11 +44,15 @@ COLS = 8
 # Set CHESS_WINDOW=1280x800 to run windowed instead (useful for testing).
 if os.environ.get("CHESS_WINDOW"):
     win_w, win_h = (int(v) for v in os.environ["CHESS_WINDOW"].lower().split("x"))
-    screen = pygame.display.set_mode((win_w, win_h))
+    display = pygame.display.set_mode((win_w, win_h))
 else:
-    screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+    display = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
 pygame.display.set_caption("Chess Power-Up Cards")
-SCREEN_WIDTH, SCREEN_HEIGHT = screen.get_size()
+SCREEN_WIDTH, SCREEN_HEIGHT = display.get_size()
+
+# The whole game is drawn to this offscreen surface, then blitted to the real
+# window each frame - optionally with a shake offset (see the main loop).
+screen = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
 clock = pygame.time.Clock()
 
 # Layout:
@@ -49,8 +73,10 @@ CARD_ASPECT = CARD_HEIGHT / CARD_WIDTH
 CARD_ROWS_FIT = max(
     1, (SCREEN_HEIGHT - CARD_TOP - SIDE_MARGIN + CARD_GAP) // (CARD_HEIGHT + CARD_GAP)
 )
-LEFT_CARD_COLS = -(-6 // CARD_ROWS_FIT)  # 6 piece power cards
-RIGHT_CARD_COLS = -(-12 // CARD_ROWS_FIT)  # 12 game cards
+# Panels wrap into columns. Counts match the card lists defined below:
+# 6 piece-power cards on the left, 18 game cards on the right.
+LEFT_CARD_COLS = -(-6 // CARD_ROWS_FIT)
+RIGHT_CARD_COLS = -(-18 // CARD_ROWS_FIT)
 
 LEFT_PANEL_WIDTH = LEFT_CARD_COLS * CARD_WIDTH + PANEL_PAD * (LEFT_CARD_COLS + 1)
 RIGHT_PANEL_WIDTH = RIGHT_CARD_COLS * CARD_WIDTH + PANEL_PAD * (RIGHT_CARD_COLS + 1)
@@ -86,9 +112,8 @@ HEIGHT = SCREEN_HEIGHT
 # -----------------------------
 # Colors
 # -----------------------------
-# Sampled from the pixel-art board asset so highlights stay in tune with it.
-LIGHT_SQUARE = (226, 213, 161)
-DARK_SQUARE = (120, 79, 72)
+# LIGHT_SQUARE / DARK_SQUARE are sampled from the active board image at load
+# time (see load_pixel_board) so coordinate labels stay readable on any palette.
 SELECT_COLOR = (80, 170, 255)
 LEGAL_MOVE_COLOR = (60, 180, 90)
 CAPTURE_COLOR = (220, 80, 80)
@@ -135,6 +160,8 @@ title_font = load_font(32, 24, bold=True)
 small_font = load_font(16, 17)
 tiny_font = load_font(16, 14)
 badge_font = load_font(16, 13, bold=True)
+menu_title_font = load_font(96, 64, bold=True)
+menu_font = load_font(32, 26, bold=True)
 
 TEXT_SHADOW_COLOR = (24, 13, 8)
 
@@ -178,7 +205,17 @@ def draw_wavy_text(font_obj, text, color, pos, amp=2, offset=2, target=None, pha
 # Assets: "pixel chess" by Dani Maccari (https://dani-maccari.itch.io/)
 # -----------------------------
 ASSET_DIR = "assets"
-BOARD_IMAGE_FILE = "board_persp_05.png"
+
+# Board color options, cycled in-game with the B key. All share the same
+# perspective geometry, so only the palette changes between them.
+BOARD_FILES = [
+    "board_persp_05.png",  # warm brown (default)
+    "board_persp_01.png",  # slate blue
+    "board_persp_02.png",  # pale green
+    "board_persp_03.png",  # steel
+    "board_persp_04.png",  # navy
+]
+current_board_index = 0
 
 # Source geometry of the perspective board image: 16x12px squares, with the
 # playing area's top-left square starting at pixel (7, 20). The frame around
@@ -189,8 +226,13 @@ BOARD_GRID_X_PX = 7
 BOARD_GRID_Y_PX = 20
 
 
-def load_pixel_board():
-    image = pygame.image.load(os.path.join(ASSET_DIR, BOARD_IMAGE_FILE)).convert_alpha()
+def load_pixel_board(filename):
+    image = pygame.image.load(os.path.join(ASSET_DIR, filename)).convert_alpha()
+
+    # Sample a light and a dark square so the drawn coordinate labels stay
+    # readable on whatever palette this board uses.
+    light = tuple(image.get_at((BOARD_GRID_X_PX + 8, BOARD_GRID_Y_PX + 6)))[:3]
+    dark = tuple(image.get_at((BOARD_GRID_X_PX + 24, BOARD_GRID_Y_PX + 6)))[:3]
 
     # Paint over the baked-in coordinate labels on the frame: the game draws
     # its own coordinates so they stay correct when the board flips for Black.
@@ -213,10 +255,12 @@ def load_pixel_board():
     scale = SQUARE_W / BOARD_TILE_W_PX
     size = round(image.get_width() * scale)
     scaled = pygame.transform.scale(image, (size, size))
-    return scaled, round(BOARD_GRID_X_PX * scale), round(BOARD_GRID_Y_PX * scale)
+    return scaled, round(BOARD_GRID_X_PX * scale), round(BOARD_GRID_Y_PX * scale), light, dark
 
 
-BOARD_IMAGE, BOARD_IMAGE_OX, BOARD_IMAGE_OY = load_pixel_board()
+BOARD_IMAGE, BOARD_IMAGE_OX, BOARD_IMAGE_OY, LIGHT_SQUARE, DARK_SQUARE = load_pixel_board(
+    BOARD_FILES[current_board_index]
+)
 
 # Animated background: a looping GIF decoded once at startup. Frames are
 # stored at half screen resolution to keep memory reasonable and upscaled
@@ -314,12 +358,31 @@ def load_fire_frames():
 FIRE_FRAMES = load_fire_frames()
 
 # 16x32 sprites: a piece stands on its square and overlaps the square above.
-PIECE_SPRITE_FILES = {
-    "P": "W_Pawn.png", "R": "W_Rook.png", "N": "W_Knight.png",
-    "B": "W_Bishop.png", "Q": "W_Queen.png", "K": "W_King.png",
-    "p": "B_Pawn.png", "r": "B_Rook.png", "n": "B_Knight.png",
-    "b": "B_Bishop.png", "q": "B_Queen.png", "k": "B_King.png",
+PIECE_NAMES = {
+    "p": "Pawn", "r": "Rook", "n": "Knight", "b": "Bishop", "q": "Queen", "k": "King",
 }
+
+# Piece color/style options. White and Black each pick a skin independently
+# (cycle with 1 and 2 in-game). A skin is drawn either from an art folder
+# ("asset") or by recoloring the crisp light sprite with a multiply tint
+# ("tint"), which keeps dark outlines dark and transparent pixels clear.
+PIECE_SKINS = [
+    {"name": "Ivory", "spec": ("asset", "classic", "W")},
+    {"name": "Onyx", "spec": ("asset", "classic", "B")},
+    {"name": "Wood", "spec": ("asset", "wood", "W")},
+    {"name": "Dark Wood", "spec": ("asset", "wood", "B")},
+    {"name": "Sky", "spec": ("tint", (150, 205, 255))},
+    {"name": "Blue", "spec": ("tint", (70, 120, 225))},
+    {"name": "Mint", "spec": ("tint", (170, 230, 150))},
+    {"name": "Green", "spec": ("tint", (55, 150, 70))},
+    {"name": "Lavender", "spec": ("tint", (210, 180, 255))},
+    {"name": "Purple", "spec": ("tint", (130, 70, 190))},
+    {"name": "Rose", "spec": ("tint", (255, 165, 155))},
+    {"name": "Red", "spec": ("tint", (200, 55, 55))},
+    {"name": "Gold", "spec": ("tint", (230, 185, 70))},
+]
+white_skin_index = 0  # Ivory
+black_skin_index = 1  # Onyx
 
 # -----------------------------
 # Card images
@@ -345,6 +408,12 @@ CARD_NAMES = [
     "extrablood",
     "chrisma",
     "inzone",
+    "nope",
+    "communism",
+    "gambit",
+    "propaganda",
+    "ifeelsafe",
+    "iguess",
 ]
 
 PIECE_POWER_CARDS = [
@@ -369,12 +438,33 @@ GENERAL_CARDS = [
     "extrablood",
     "chrisma",
     "inzone",
+    "nope",
+    "communism",
+    "gambit",
+    "propaganda",
+    "ifeelsafe",
+    "iguess",
 ]
+
+# Which of your pieces a draggable card may be played on. A piece letter means
+# only that type; "any" means any of your pieces; "non_king" means any but the
+# king. Used to highlight valid targets while a card is being dragged.
+CARD_TARGET_TYPE = {
+    "pawntastic": "p",
+    "bishock": "b",
+    "rookdemon": "r",
+    "windknight": "n",
+    "queentum": "q",
+    "longlivetheking": "k",
+    "thedramatic": "any",
+    "inzone": "inzone",  # any of your pieces except king and queen
+    "gambit": "non_king",
+}
 
 def load_card_image(path):
     try:
         return pygame.image.load(path).convert_alpha()
-    except pygame.error:
+    except (pygame.error, FileNotFoundError):
         return None
 
 
@@ -443,6 +533,12 @@ CARD_COSTS = {
     "extrablood": 15,
     "chrisma": 15,
     "inzone": 30,
+    "nope": 15,
+    "communism": 20,
+    "gambit": 10,
+    "propaganda": 30,
+    "ifeelsafe": 15,
+    "iguess": 40,
 }
 
 ABILITY_CARDS = {
@@ -467,6 +563,12 @@ GAME_CARDS = {
     "extrablood",
     "chrisma",
     "inzone",
+    "nope",
+    "communism",
+    "gambit",
+    "propaganda",
+    "ifeelsafe",
+    "iguess",
 }
 
 card_images = {
@@ -497,7 +599,13 @@ CARD_INFO = {
     "timetraveler": ("TimeTraveler", (40, 80, 140), "Rewind the board 3 turns."),
     "extrablood": ("ExtraBlood", (120, 25, 25), "Passive: capture Ether is doubled."),
     "chrisma": ("Chrisma", (135, 45, 115), "Convert enemy pieces around your king."),
-    "inzone": ("InZone", (150, 40, 35), "Chain captures with one piece; it dies after."),
+    "inzone": ("InZone", (150, 40, 35), "Chain up to 5 captures; the piece dies after."),
+    "nope": ("Nope", (60, 60, 110), "Cancel the opponent's last card; kills the checker if you are in check."),
+    "communism": ("Communism", (150, 30, 30), "Split all Ether evenly between both players."),
+    "gambit": ("Gambit", (110, 80, 30), "Sacrifice one of your pieces for double its value in Ether."),
+    "propaganda": ("Propaganda", (120, 60, 130), "Each of your turns: 50% to convert an enemy piece."),
+    "ifeelsafe": ("I Feel Safe", (40, 110, 120), "Passive: end of turn, +3 Ether per piece by your king."),
+    "iguess": ("I Guess", (90, 90, 100), "Permanently take 2 extra moves each turn."),
 }
 
 
@@ -668,6 +776,15 @@ def draw_animations():
 
             fall_part = 0.4
             if progress < fall_part:
+                # The doomed pieces are still standing while the meteor falls;
+                # they vanish under the explosion the instant it lands.
+                for pr, pc, piece in sorted(anim["extra"].get("destroyed_pieces", [])):
+                    px, py = board_to_screen(pr, pc)
+                    ghost = get_piece_surface(piece)
+                    screen.blit(ghost, ghost.get_rect(
+                        midbottom=(px + SQUARE_W // 2, py + SQUARE_H - SQUARE_H // 12)
+                    ))
+
                 t = progress / fall_part
                 fall_frames = METEOR_FRAMES[:METEOR_FALL_COUNT]
                 frame = fall_frames[min(len(fall_frames) - 1, int(t * len(fall_frames)))]
@@ -675,6 +792,12 @@ def draw_animations():
                 pos_y = round(start_y + (impact[1] - start_y) * t * t)
                 screen.blit(frame, frame.get_rect(midbottom=(impact[0], pos_y)))
             else:
+                # The moment the meteor lands: lay down the fire tiles so the
+                # burning starts after the strike, not before it.
+                if not anim["extra"].get("fire_started"):
+                    game.add_fire_tiles(anim["extra"].get("fire_squares", []))
+                    anim["extra"]["fire_started"] = True
+
                 impact_frames = METEOR_FRAMES[METEOR_FALL_COUNT:]
                 t = (progress - fall_part) / (1 - fall_part)
                 index = min(len(impact_frames) - 1, int(t * len(impact_frames)))
@@ -701,6 +824,58 @@ def draw_animations():
             squashed = pygame.transform.scale(piece_surface, (w, h))
             rect = squashed.get_rect(midbottom=(x + SQUARE_W // 2, y + SQUARE_H - SQUARE_H // 12))
             screen.blit(squashed, rect)
+
+        elif anim["kind"] == "teleport":
+            extra = anim["extra"]
+            piece = extra["piece"]
+            fr, fc = extra["from"]
+            tr, tc = extra["to"]
+            fx, fy = board_to_screen(fr, fc)
+            tx, ty = board_to_screen(tr, tc)
+            inner = (200, 120, 255)
+            outer = (150, 220, 255)
+
+            def beam(cx, top, amount):
+                # A vertical pillar of light, brightest at full amount.
+                if amount <= 0:
+                    return
+                w = max(4, int(SQUARE_W * 0.5 * amount))
+                pillar = pygame.Surface((w, SQUARE_H * 2), pygame.SRCALPHA)
+                pillar.fill((*outer, int(120 * amount)))
+                screen.blit(pillar, pillar.get_rect(midtop=(cx, top - SQUARE_H)))
+
+            def rings(cx, cy, radius, alpha):
+                for k, color in enumerate((inner, outer)):
+                    rad = radius - k * max(3, SQUARE_W // 16)
+                    if rad > 1:
+                        ring = pygame.Surface((rad * 2 + 4, rad * 2 + 4), pygame.SRCALPHA)
+                        pygame.draw.circle(ring, (*color, alpha), (rad + 2, rad + 2), rad, max(2, SQUARE_W // 24))
+                        screen.blit(ring, ring.get_rect(center=(cx, cy)))
+
+            # Phase 1 (dematerialize at origin): queen shrinks into a beam.
+            if progress < 0.55:
+                t = progress / 0.55
+                fcx = fx + SQUARE_W // 2
+                ghost = get_piece_surface(piece)
+                gw = max(1, round(ghost.get_width() * (1 - 0.6 * t)))
+                gh = max(1, round(ghost.get_height() * (1 - 0.2 * t)))
+                ghost = pygame.transform.scale(ghost, (gw, gh))
+                ghost.set_alpha(int(255 * (1 - t)))
+                screen.blit(ghost, ghost.get_rect(midbottom=(fcx, fy + SQUARE_H - SQUARE_H // 12)))
+                beam(fcx, fy, 1 - t)
+                rings(fcx, fy + SQUARE_H // 2, int(SQUARE_W * (0.55 - 0.45 * t)), int(220 * (1 - t)))
+
+            # Phase 2 (materialize at destination): beam forms into the queen.
+            if progress > 0.4:
+                t = (progress - 0.4) / 0.6
+                tcx = tx + SQUARE_W // 2
+                beam(tcx, ty, 1 - t)
+                queen = get_piece_surface(piece)
+                qh = max(1, round(queen.get_height() * (0.4 + 0.6 * t)))
+                grown = pygame.transform.scale(queen, (queen.get_width(), qh))
+                grown.set_alpha(int(255 * t))
+                screen.blit(grown, grown.get_rect(midbottom=(tcx, ty + SQUARE_H - SQUARE_H // 12)))
+                rings(tcx, ty + SQUARE_H // 2, int(SQUARE_W * 0.55 * (1 - t)), int(220 * t))
 
         anim["frames"] -= 1
         if anim["frames"] <= 0:
@@ -774,6 +949,27 @@ class GameState:
         self.inzone_square = None
         self.inzone_captures = 0
 
+        # Propaganda: at the start of each of these players' turns there is a
+        # 50% chance to convert one enemy non-king piece.
+        self.propaganda_active = set()
+
+        # I Feel Safe: at the end of these players' turns, gain 3 Ether per
+        # friendly piece adjacent to their king.
+        self.ifeelsafe_active = set()
+
+        # I Guess: permanent extra moves per turn. pending_extra_moves counts
+        # how many extra moves remain in the current turn before it passes.
+        self.bonus_turns = {WHITE: 0, BLACK: 0}
+        self.pending_extra_moves = {WHITE: 0, BLACK: 0}
+
+        # Nope: snapshot of the state just before each player's last game card,
+        # so the opponent can cancel it.
+        self.card_undo = {WHITE: None, BLACK: None}
+
+        # Guards start-of-turn effects so they fire once per real turn (not on
+        # each extra move within an "I Guess" multi-move turn).
+        self._effects_applied_for = None
+
         # TimeTraveler system:
         # Save board/piece states before real turn actions.
         self.history = []
@@ -803,11 +999,42 @@ class GameState:
     def enemy_color(self, color):
         return BLACK if color == WHITE else WHITE
 
+    def pieces_around_king(self, color):
+        king = self.find_king(color)
+        if king is None:
+            return 0
+        kr, kc = king
+        count = 0
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = kr + dr, kc + dc
+                if self.in_bounds(nr, nc) and self.is_friend(nr, nc, color):
+                    count += 1
+        return count
+
     def pass_turn(self):
         # In cheat mode the turn is frozen so one player can act repeatedly.
         if self.cheat_mode:
             return
+
+        # "I Guess": spend a banked extra move instead of ending the turn.
+        if self.pending_extra_moves.get(self.turn, 0) > 0:
+            self.pending_extra_moves[self.turn] -= 1
+            return
+
+        # "I Feel Safe": end-of-turn Ether for a fortified king.
+        if self.turn in self.ifeelsafe_active:
+            bonus = 3 * self.pieces_around_king(self.turn)
+            if bonus > 0:
+                self.add_ether(self.turn, bonus)
+                king = self.find_king(self.turn)
+                if king is not None:
+                    add_animation("coin", squares=[king], text=f"+{bonus}", color=(120, 230, 255), frames=32)
+
         self.turn = self.enemy_color(self.turn)
+        self.pending_extra_moves[self.turn] = self.bonus_turns.get(self.turn, 0)
 
     def in_bounds(self, row, col):
         return 0 <= row < 8 and 0 <= col < 8
@@ -890,6 +1117,9 @@ class GameState:
 
         self.save_history()
         self.ether[self.turn] -= cost
+
+        # Remember the pre-card state so the opponent's Nope can cancel it.
+        self.card_undo[self.turn] = copy.deepcopy(self.history[-1])
         return True
 
     def consume_turn_after_game_card(self, message):
@@ -914,6 +1144,11 @@ class GameState:
             self.status_message = message.replace("{player}", played_by.capitalize())
 
     def start_turn_effects(self):
+        # Run once per real turn, not on each extra "I Guess" move.
+        if self._effects_applied_for == self.turn:
+            return
+        self._effects_applied_for = self.turn
+
         # AbsoluteProtection expires when the protected player gets the turn back.
         if self.turn in self.absolute_protection_active:
             self.absolute_protection_active.remove(self.turn)
@@ -958,6 +1193,26 @@ class GameState:
                 )
                 add_animation("poison", squares=[(row, col)], text="PLAGUE", color=(125, 220, 80), frames=42)
 
+        # Propaganda: 50% chance to convert one enemy non-king piece.
+        if self.turn in self.propaganda_active and random.random() < 0.5:
+            enemy = self.enemy_color(self.turn)
+            targets = [
+                (r, c)
+                for r in range(8)
+                for c in range(8)
+                if self.board[r][c] is not None
+                and self.piece_color(self.board[r][c]) == enemy
+                and self.board[r][c].lower() != "k"
+            ]
+            if targets:
+                row, col = random.choice(targets)
+                piece = self.board[row][col]
+                self.board[row][col] = piece.upper() if self.turn == WHITE else piece.lower()
+                self.rookdemon_rooks.pop((row, col), None)
+                self.dramatic_pieces.discard((row, col))
+                self.status_message = f"Propaganda converted {enemy}'s {piece.upper()}."
+                add_animation("magic", squares=[(row, col)], text="PROPAGANDA", color=(210, 130, 255), frames=42)
+
     def is_absolute_protected_square(self, row, col):
         piece = self.board[row][col]
 
@@ -1001,6 +1256,9 @@ class GameState:
             "plague_active": copy.deepcopy(self.plague_active),
             "absolute_protection_active": copy.deepcopy(self.absolute_protection_active),
             "extra_blood_active": copy.deepcopy(self.extra_blood_active),
+            "propaganda_active": copy.deepcopy(self.propaganda_active),
+            "ifeelsafe_active": copy.deepcopy(self.ifeelsafe_active),
+            "bonus_turns": copy.deepcopy(self.bonus_turns),
             "used_cards": copy.deepcopy(self.used_cards),
             "ether": copy.deepcopy(self.ether),
             "turn": self.turn,
@@ -1018,17 +1276,11 @@ class GameState:
         if len(self.history) > 12:
             self.history.pop(0)
 
-    def restore_snapshot(self, snapshot):
+    def restore_snapshot(self, snapshot, positions_only=False, keep_turn=False, keep_ether=False):
+        # Piece positions and the state needed to keep play legal.
         self.board = copy.deepcopy(snapshot["board"])
-        self.fire_tiles = copy.deepcopy(snapshot["fire_tiles"])
         self.rookdemon_rooks = copy.deepcopy(snapshot["rookdemon_rooks"])
         self.dramatic_pieces = copy.deepcopy(snapshot["dramatic_pieces"])
-        self.plague_active = copy.deepcopy(snapshot["plague_active"])
-        self.absolute_protection_active = copy.deepcopy(snapshot["absolute_protection_active"])
-        self.extra_blood_active = copy.deepcopy(snapshot["extra_blood_active"])
-        self.used_cards = copy.deepcopy(snapshot["used_cards"])
-        self.ether = copy.deepcopy(snapshot["ether"])
-        self.turn = snapshot["turn"]
         self.white_king_moved = snapshot["white_king_moved"]
         self.black_king_moved = snapshot["black_king_moved"]
         self.white_left_rook_moved = snapshot["white_left_rook_moved"]
@@ -1036,6 +1288,22 @@ class GameState:
         self.black_left_rook_moved = snapshot["black_left_rook_moved"]
         self.black_right_rook_moved = snapshot["black_right_rook_moved"]
         self.en_passant_target = snapshot["en_passant_target"]
+
+        # positions_only (TimeTraveler): leave Ether, powers and fire as-is so
+        # only the pieces rewind; everything else stays active.
+        if not positions_only:
+            self.fire_tiles = copy.deepcopy(snapshot["fire_tiles"])
+            self.plague_active = copy.deepcopy(snapshot["plague_active"])
+            self.absolute_protection_active = copy.deepcopy(snapshot["absolute_protection_active"])
+            self.extra_blood_active = copy.deepcopy(snapshot["extra_blood_active"])
+            self.propaganda_active = copy.deepcopy(snapshot["propaganda_active"])
+            self.ifeelsafe_active = copy.deepcopy(snapshot["ifeelsafe_active"])
+            self.bonus_turns = copy.deepcopy(snapshot["bonus_turns"])
+            self.used_cards = copy.deepcopy(snapshot["used_cards"])
+            if not keep_ether:
+                self.ether = copy.deepcopy(snapshot["ether"])
+            if not keep_turn:
+                self.turn = snapshot["turn"]
 
         self.selected = None
         self.legal_moves_for_selected = []
@@ -1519,6 +1787,7 @@ class GameState:
         destroyed_value = 0
         destroyed_count = 0
         fire_squares = []
+        destroyed_pieces = []
 
         for dr in [-1, 0, 1]:
             for dc in [-1, 0, 1]:
@@ -1537,6 +1806,10 @@ class GameState:
                 if target_piece is not None:
                     destroyed_value += self.get_piece_value(target_piece)
                     destroyed_count += 1
+                    # Removed from the board now (so game logic stays correct),
+                    # but remembered so the animation can keep showing them
+                    # standing until the meteor actually lands on them.
+                    destroyed_pieces.append((nr, nc, target_piece))
                     self.board[nr][nc] = None
                     self.rookdemon_rooks.pop((nr, nc), None)
                     self.dramatic_pieces.discard((nr, nc))
@@ -1548,11 +1821,17 @@ class GameState:
                 fire_squares.append((nr, nc))
 
         self.add_ether(self.turn, destroyed_value)
-        self.add_fire_tiles(fire_squares)
 
         if METEOR_FRAMES:
-            add_animation("meteor_sprite", frames=96, extra={"square": (row, col)})
+            # Fire is laid down only when the meteor hits (see meteor_sprite),
+            # so the strike plays out over clean squares first.
+            add_animation("meteor_sprite", frames=96, extra={
+                "square": (row, col),
+                "fire_squares": fire_squares,
+                "destroyed_pieces": destroyed_pieces,
+            })
         else:
+            self.add_fire_tiles(fire_squares)
             add_animation("blast", squares=fire_squares, text="METEOR", color=(255, 95, 35), frames=38)
 
         self.consume_turn_after_game_card(
@@ -1678,10 +1957,12 @@ class GameState:
             return
 
         snapshot = copy.deepcopy(self.history[-4])
-        self.restore_snapshot(snapshot)
+        # Only the piece positions rewind - Ether, used cards and every active
+        # power are kept as they are now.
+        self.restore_snapshot(snapshot, positions_only=True)
         self.history = self.history[:-4]
         add_animation("magic", squares=[(r, c) for r in range(8) for c in range(8)], text="TIME", color=(120, 190, 255), frames=55)
-        self.status_message = "TimeTraveler restored the board from 3 turns ago."
+        self.status_message = "TimeTraveler rewound the pieces 3 turns. Ether and powers are kept."
         self.decay_fire_tiles()
         self.pass_turn()
         self.start_turn_effects()
@@ -1771,6 +2052,10 @@ class GameState:
             self.status_message = "InZone cannot be used on kings."
             return
 
+        if piece.lower() == "q":
+            self.status_message = "InZone cannot be used on the queen."
+            return
+
         capture_moves = self.get_capture_moves_only(row, col)
 
         if not capture_moves:
@@ -1788,6 +2073,153 @@ class GameState:
         self.legal_moves_for_selected = capture_moves
         add_animation("magic", squares=[(row, col)], text="ZONE", color=(255, 70, 70), frames=42)
         self.status_message = "InZone active: capture repeatedly with this piece. It dies when the streak ends."
+
+    def find_checking_pieces(self, color):
+        king = self.find_king(color)
+        if king is None:
+            return []
+        enemy = self.enemy_color(color)
+        attackers = []
+        for r in range(8):
+            for c in range(8):
+                piece = self.board[r][c]
+                if piece is not None and self.piece_color(piece) == enemy:
+                    if king in self.get_pseudo_legal_moves(r, c, include_castling=False):
+                        attackers.append((r, c))
+        return attackers
+
+    def activate_nope(self):
+        if self.game_over:
+            return
+
+        opp = self.enemy_color(self.turn)
+
+        if self.card_undo.get(opp) is None and not self.is_in_check(self.turn):
+            self.status_message = "Nope has nothing to cancel."
+            return
+
+        if not self.pay_for_game_card("nope"):
+            return
+
+        notes = []
+
+        # Cancel the opponent's last card by reverting its board/power effects
+        # (the current turn and Ether totals are left as they are now).
+        if self.card_undo.get(opp) is not None:
+            self.restore_snapshot(self.card_undo[opp], keep_turn=True, keep_ether=True)
+            self.card_undo[opp] = None
+            notes.append("cancelled the opponent's last card")
+
+        # If still in check after that, the checking piece is destroyed.
+        if self.is_in_check(self.turn):
+            killed = 0
+            for r, c in self.find_checking_pieces(self.turn):
+                piece = self.board[r][c]
+                if piece is not None and piece.lower() != "k":
+                    self.board[r][c] = None
+                    self.rookdemon_rooks.pop((r, c), None)
+                    self.dramatic_pieces.discard((r, c))
+                    add_animation("burst", squares=[(r, c)], text="NOPE", color=(120, 160, 255), frames=36)
+                    killed += 1
+            if killed:
+                notes.append("destroyed the checking piece")
+
+        summary = " and ".join(notes) if notes else "fizzled"
+        self.consume_turn_after_game_card(f"{{player}} played Nope: {summary}.")
+
+    def activate_communism(self):
+        if self.game_over:
+            return
+
+        if not self.pay_for_game_card("communism"):
+            return
+
+        total = self.ether[WHITE] + self.ether[BLACK]
+        half = total // 2
+        # Any odd Ether goes to the player who played the card.
+        self.ether[self.enemy_color(self.turn)] = half
+        self.ether[self.turn] = total - half
+        add_animation("banner", text="COMMUNISM", color=(220, 60, 60), frames=44)
+        self.consume_turn_after_game_card("{player} played Communism. Ether is now shared equally.")
+
+    def activate_gambit_on_square(self, row, col):
+        if self.game_over:
+            return
+
+        piece = self.board[row][col]
+
+        if piece is None:
+            self.status_message = "Drop Gambit on one of your pieces."
+            return
+
+        if self.piece_color(piece) != self.turn:
+            self.status_message = "You can only sacrifice your own piece."
+            return
+
+        if piece.lower() == "k":
+            self.status_message = "Gambit cannot sacrifice the king."
+            return
+
+        if not self.pay_for_game_card("gambit"):
+            return
+
+        value = self.get_piece_value(piece) * 2
+        self.board[row][col] = None
+        self.rookdemon_rooks.pop((row, col), None)
+        self.dramatic_pieces.discard((row, col))
+        if self.windknight_square == (row, col):
+            self.windknight_square = None
+            self.windknight_moves_remaining = 0
+
+        self.add_ether(self.turn, value)
+        add_animation("burst", squares=[(row, col)], text="GAMBIT", color=(200, 150, 60), frames=34)
+        add_animation("coin", squares=[(row, col)], text=f"+{value}", color=(255, 220, 90), frames=40)
+        self.consume_turn_after_game_card(f"{{player}} sacrificed a piece for {value} Ether.")
+
+    def activate_propaganda(self):
+        if self.game_over:
+            return
+
+        if self.turn in self.propaganda_active:
+            self.status_message = "Propaganda is already active for you."
+            return
+
+        if not self.pay_for_game_card("propaganda"):
+            return
+
+        self.propaganda_active.add(self.turn)
+        add_animation("banner", text="PROPAGANDA", color=(210, 130, 255), frames=46)
+        self.consume_turn_after_game_card("{player} spread Propaganda. Each turn may convert an enemy piece.")
+
+    def activate_ifeelsafe(self):
+        if self.game_over:
+            return
+
+        if self.turn in self.ifeelsafe_active:
+            self.status_message = "I Feel Safe is already active for you."
+            return
+
+        if not self.pay_for_game_card("ifeelsafe"):
+            return
+
+        self.ifeelsafe_active.add(self.turn)
+        add_animation("banner", text="I FEEL SAFE", color=(90, 210, 255), frames=46)
+        self.consume_turn_after_game_card(
+            "{player} feels safe. End of turn: +3 Ether per piece by the king."
+        )
+
+    def activate_iguess(self):
+        if self.game_over:
+            return
+
+        if not self.pay_for_game_card("iguess"):
+            return
+
+        self.bonus_turns[self.turn] += 2
+        add_animation("banner", text="I GUESS  +2 MOVES", color=(150, 220, 150), frames=50)
+        self.consume_turn_after_game_card(
+            "{player} played I Guess. They now take 2 extra moves every turn."
+        )
 
     # -----------------------------
     # Move generation
@@ -2075,6 +2507,9 @@ class GameState:
 
         if not test_mode:
             self.save_history()
+            # A normal move makes this player's last action a move, not a card,
+            # so the opponent's Nope can no longer cancel a card here.
+            self.card_undo[self.piece_color(piece)] = None
 
         color = self.piece_color(piece)
         piece_type = piece.lower()
@@ -2209,6 +2644,11 @@ class GameState:
 
             if self.active_card == "queentum":
                 self.used_cards[color].add("queentum")
+                add_animation("teleport", frames=34, extra={
+                    "from": original_from_square,
+                    "to": original_to_square,
+                    "piece": piece,
+                })
 
             if capture_ether > 0 and color in self.extra_blood_active:
                 capture_ether *= 2
@@ -2258,7 +2698,11 @@ class GameState:
                     self.selected = (to_row, to_col)
                     self.legal_moves_for_selected = self.get_capture_moves_only(to_row, to_col)
 
-                    if self.legal_moves_for_selected:
+                    # The streak ends at 5 captures, or immediately if a king
+                    # is now in check (either side).
+                    check_on_board = self.is_in_check(WHITE) or self.is_in_check(BLACK)
+
+                    if self.legal_moves_for_selected and self.inzone_captures < 5 and not check_on_board:
                         self.status_message = "InZone: keep capturing with the same piece."
                         return
 
@@ -2478,6 +2922,69 @@ def get_card_rects():
 # -----------------------------
 # Drawing
 # -----------------------------
+def draw_corner_brackets(rect, color, thickness=3):
+    # An L-shaped bracket in each corner, leaving the middle of every edge
+    # empty - frames the square without filling it.
+    inset = max(3, SQUARE_W // 14)
+    arm = max(6, SQUARE_W // 4)
+    inner = rect.inflate(-inset * 2, -inset * 2)
+
+    for (corner, hx, vy) in (
+        (inner.topleft, 1, 1),
+        (inner.topright, -1, 1),
+        (inner.bottomleft, 1, -1),
+        (inner.bottomright, -1, -1),
+    ):
+        cx, cy = corner
+        pygame.draw.line(screen, color, corner, (cx + hx * arm, cy), thickness)
+        pygame.draw.line(screen, color, corner, (cx, cy + vy * arm), thickness)
+
+
+def get_card_target_squares(card_name):
+    target = CARD_TARGET_TYPE.get(card_name)
+
+    if target is None:
+        return []
+
+    squares = []
+    for r in range(ROWS):
+        for c in range(COLS):
+            piece = game.board[r][c]
+            if piece is None or game.piece_color(piece) != game.turn:
+                continue
+            kind = piece.lower()
+            if (
+                target == "any"
+                or (target == "non_king" and kind != "k")
+                or (target == "inzone" and kind not in ("k", "q"))
+                or kind == target
+            ):
+                squares.append((r, c))
+
+    return squares
+
+
+def draw_card_target_hints():
+    # While a piece-targeting card is held, show which of your pieces it can
+    # be dropped on: a soft tint plus pulsing amber corner brackets.
+    if dragging_card is None:
+        return
+
+    squares = get_card_target_squares(dragging_card)
+    if not squares:
+        return
+
+    # Blink the outline on and off (no fill).
+    if pygame.time.get_ticks() % 700 >= 350:
+        return
+
+    color = (70, 230, 90)
+    for r, c in squares:
+        x, y = board_to_screen(r, c)
+        rect = pygame.Rect(x, y, SQUARE_W, SQUARE_H)
+        draw_corner_brackets(rect, color, thickness=max(3, SQUARE_W // 22))
+
+
 def draw_board():
     # Pixel-art board with its own frame baked into the image.
     screen.blit(BOARD_IMAGE, (BOARD_X - BOARD_IMAGE_OX, BOARD_Y - BOARD_IMAGE_OY))
@@ -2529,13 +3036,12 @@ def draw_board():
     for move in game.legal_moves_for_selected:
         row, col = move
         x, y = board_to_screen(row, col)
-        center = (x + SQUARE_W // 2, y + SQUARE_H // 2)
+        rect = pygame.Rect(x, y, SQUARE_W, SQUARE_H)
 
         if game.board[row][col] is None:
-            pygame.draw.circle(screen, LEGAL_MOVE_COLOR, center, max(7, SQUARE_SIZE // 7))
-            pygame.draw.circle(screen, (20, 90, 30), center, max(8, SQUARE_SIZE // 7), 2)
+            draw_corner_brackets(rect, LEGAL_MOVE_COLOR, thickness=max(3, SQUARE_W // 22))
         else:
-            pygame.draw.circle(screen, CAPTURE_COLOR, center, max(11, SQUARE_SIZE // 5), 4)
+            draw_corner_brackets(rect, CAPTURE_COLOR, thickness=max(4, SQUARE_W // 16))
 
 
 def draw_badge(text, color, topleft):
@@ -2592,11 +3098,33 @@ def get_piece_shadow():
     return _piece_shadow
 
 
+def _load_themed_sprite(spec, piece):
+    name = PIECE_NAMES[piece.lower()]
+
+    if spec[0] == "asset":
+        _, folder, prefix = spec
+        return pygame.image.load(
+            os.path.join(ASSET_DIR, "pieces", folder, f"{prefix}_{name}.png")
+        ).convert_alpha()
+
+    # Tint: recolor the classic light sprite by multiplying with the color.
+    # Multiply leaves the dark outline dark and transparent pixels untouched.
+    base = pygame.image.load(
+        os.path.join(ASSET_DIR, "pieces", "classic", f"W_{name}.png")
+    ).convert_alpha()
+    tint = pygame.Surface(base.get_size(), pygame.SRCALPHA)
+    tint.fill((*spec[1], 255))
+    base.blit(tint, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
+    return base
+
+
 def get_piece_surface(piece, lifted=False):
-    key = (piece, lifted)
+    skin_index = white_skin_index if piece.isupper() else black_skin_index
+    key = (skin_index, piece, lifted)
 
     if key not in _piece_cache:
-        sprite = pygame.image.load(os.path.join(ASSET_DIR, PIECE_SPRITE_FILES[piece])).convert_alpha()
+        spec = PIECE_SKINS[skin_index]["spec"]
+        sprite = _load_themed_sprite(spec, piece)
         # Nearest-neighbour scaling keeps the pixel art crisp. A picked-up
         # piece is drawn slightly larger so it reads as closer to the camera.
         scale = 1.12 if lifted else 1.0
@@ -2615,6 +3143,8 @@ def draw_pieces():
         for anim in animations
         if anim["kind"] in ("piece_drop", "piece_land")
     }
+    # The teleporting queen is drawn by the teleport animation until it lands.
+    animated_squares |= {anim["extra"]["to"] for anim in animations if anim["kind"] == "teleport"}
 
     occupied = []
     for row in range(ROWS):
@@ -3065,24 +3595,379 @@ def get_square_from_mouse(pos):
     return row, col
 
 
+# =====================================================================
+# Start screen and menus (Balatro-style m6x11 UI)
+# =====================================================================
+MENU_BG1 = (16, 12, 28)
+MENU_BG2 = (22, 16, 36)
+MENU_CYAN = (95, 232, 220)
+MENU_PINK = (242, 96, 176)
+MENU_WHITE = (236, 240, 248)
+MENU_MUTED = (122, 112, 154)
+MENU_GREEN = (96, 230, 136)
+
+app_state = "menu"  # "menu" | "playing" | "catalog" | "settings"
+menu_selected = 0
+
+MENU_ITEMS = [
+    {"label": "START", "action": "start", "icon": "pawn", "key": "enter", "accent": MENU_CYAN},
+    {"label": "CATALOG", "action": "catalog", "icon": "club", "key": "C", "accent": MENU_PINK},
+    {"label": "SETTINGS", "action": "settings", "icon": "gear", "key": "S", "accent": MENU_CYAN},
+    {"label": "EXIT", "action": "exit", "icon": "x", "key": "Q", "accent": MENU_PINK},
+]
+
+
+def draw_menu_background():
+    screen.fill(MENU_BG1)
+    tile = 44
+    for gy in range(0, SCREEN_HEIGHT, tile):
+        for gx in range(0, SCREEN_WIDTH, tile):
+            if (gx // tile + gy // tile) % 2 == 0:
+                pygame.draw.rect(screen, MENU_BG2, (gx, gy, tile, tile))
+
+
+def draw_icon(kind, cx, cy, s, color):
+    r = max(2, s // 5)
+    if kind == "pawn":
+        pygame.draw.circle(screen, color, (cx, cy - s // 3), r)
+        pygame.draw.polygon(screen, color, [
+            (cx - s // 3, cy + s // 3), (cx + s // 3, cy + s // 3),
+            (cx + r, cy - s // 8), (cx - r, cy - s // 8)])
+        pygame.draw.rect(screen, color, (cx - s // 3 - 2, cy + s // 3, 2 * (s // 3) + 4, max(2, s // 7)))
+    elif kind == "club":
+        pygame.draw.circle(screen, color, (cx, cy - r), r)
+        pygame.draw.circle(screen, color, (cx - r, cy + r // 2), r)
+        pygame.draw.circle(screen, color, (cx + r, cy + r // 2), r)
+        pygame.draw.rect(screen, color, (cx - r // 3, cy, max(2, 2 * r // 3), r + s // 5))
+    elif kind == "heart":
+        pygame.draw.circle(screen, color, (cx - r, cy - r // 2), r)
+        pygame.draw.circle(screen, color, (cx + r, cy - r // 2), r)
+        pygame.draw.polygon(screen, color, [
+            (cx - 2 * r, cy - r // 3), (cx + 2 * r, cy - r // 3), (cx, cy + s // 2)])
+    elif kind == "spade":
+        pygame.draw.polygon(screen, color, [
+            (cx, cy - s // 2), (cx - 2 * r, cy + r // 2), (cx + 2 * r, cy + r // 2)])
+        pygame.draw.circle(screen, color, (cx - r, cy + r // 2), r)
+        pygame.draw.circle(screen, color, (cx + r, cy + r // 2), r)
+        pygame.draw.rect(screen, color, (cx - r // 3, cy + r // 2, max(2, 2 * r // 3), r))
+    elif kind == "gear":
+        pygame.draw.circle(screen, color, (cx, cy), s // 2, 3)
+        pygame.draw.circle(screen, color, (cx, cy), max(2, s // 5))
+        for i in range(8):
+            a = i * math.pi / 4
+            pygame.draw.line(screen, color,
+                (cx + int(math.cos(a) * s // 2), cy + int(math.sin(a) * s // 2)),
+                (cx + int(math.cos(a) * (s // 2 + s // 5)), cy + int(math.sin(a) * (s // 2 + s // 5))), 3)
+    elif kind == "x":
+        h = s // 2
+        pygame.draw.line(screen, color, (cx - h, cy - h), (cx + h, cy + h), 4)
+        pygame.draw.line(screen, color, (cx - h, cy + h), (cx + h, cy - h), 4)
+
+
+def draw_neon_card(cx, cy, color, suit):
+    w, h = 88, 120
+    glow = pygame.Surface((w + 20, h + 20), pygame.SRCALPHA)
+    pygame.draw.rect(glow, (*color, 55), glow.get_rect(), border_radius=14)
+    screen.blit(glow, glow.get_rect(center=(cx, cy)))
+    rect = pygame.Rect(0, 0, w, h)
+    rect.center = (cx, cy)
+    panel = pygame.Surface((w, h), pygame.SRCALPHA)
+    pygame.draw.rect(panel, (*MENU_BG1, 230), panel.get_rect(), border_radius=10)
+    screen.blit(panel, rect)
+    pygame.draw.rect(screen, color, rect, 2, border_radius=10)
+    draw_icon(suit, cx, cy, 30, color)
+
+
+def draw_enter_arrow(cx, cy, color):
+    pygame.draw.line(screen, color, (cx + 6, cy - 5), (cx + 6, cy + 2), 2)
+    pygame.draw.line(screen, color, (cx + 6, cy + 2), (cx - 4, cy + 2), 2)
+    pygame.draw.polygon(screen, color, [(cx - 4, cy - 2), (cx - 4, cy + 6), (cx - 9, cy + 2)])
+
+
+def draw_key_badge(center, text, color):
+    rect = pygame.Rect(0, 0, 30, 26)
+    rect.center = center
+    pygame.draw.rect(screen, MENU_BG2, rect, border_radius=6)
+    pygame.draw.rect(screen, color, rect, 1, border_radius=6)
+    if text == "enter":
+        draw_enter_arrow(rect.centerx, rect.centery, color)
+    else:
+        label = badge_font.render(text, True, color)
+        screen.blit(label, label.get_rect(center=rect.center))
+
+
+def draw_glow_title(text, color, center):
+    halo = menu_title_font.render(text, True, color)
+    rect = halo.get_rect(center=center)
+    for ox, oy in ((-3, 0), (3, 0), (0, -3), (0, 3)):
+        ghost = halo.copy()
+        ghost.set_alpha(60)
+        screen.blit(ghost, (rect.x + ox, rect.y + oy))
+    return rect
+
+
+def get_menu_rects():
+    bw = int(min(560, SCREEN_WIDTH * 0.42))
+    bh = max(54, int(SCREEN_HEIGHT * 0.075))
+    gap = max(12, int(SCREEN_HEIGHT * 0.022))
+    top = int(SCREEN_HEIGHT * 0.40)
+    x = (SCREEN_WIDTH - bw) // 2
+    return [pygame.Rect(x, top + i * (bh + gap), bw, bh) for i in range(len(MENU_ITEMS))]
+
+
+def draw_back_hint():
+    draw_shadow_text(small_font, "ESC  BACK", MENU_MUTED, (40, SCREEN_HEIGHT - 44))
+
+
+def draw_start_screen():
+    draw_menu_background()
+
+    # Decorative neon cards.
+    draw_neon_card(SCREEN_WIDTH - 110, int(SCREEN_HEIGHT * 0.26), MENU_CYAN, "spade")
+    draw_neon_card(SCREEN_WIDTH - 150, int(SCREEN_HEIGHT * 0.62), MENU_PINK, "heart")
+
+    # Title: CHESS (white) + BYTE (teal), with a cyan halo.
+    chess = menu_title_font.render("CHESS", True, MENU_WHITE)
+    byte = menu_title_font.render("BYTE", True, MENU_CYAN)
+    total_w = chess.get_width() + byte.get_width()
+    tx = (SCREEN_WIDTH - total_w) // 2
+    ty = int(SCREEN_HEIGHT * 0.10)
+    halo = menu_title_font.render("CHESSBYTE", True, MENU_CYAN)
+    for ox, oy in ((-3, 0), (3, 0), (0, -3), (0, 3)):
+        ghost = halo.copy()
+        ghost.set_alpha(55)
+        screen.blit(ghost, (tx + ox, ty + oy))
+    screen.blit(chess, (tx, ty))
+    screen.blit(byte, (tx + chess.get_width(), ty))
+
+    # Subtitle with a small diamond separator.
+    left = small_font.render("ROGUELIKE", True, MENU_PINK)
+    right = small_font.render("POWER-UP CHESS", True, MENU_PINK)
+    gap = 34
+    sub_w = left.get_width() + gap + right.get_width()
+    sx = (SCREEN_WIDTH - sub_w) // 2
+    sy = ty + chess.get_height() + 12
+    screen.blit(left, (sx, sy))
+    screen.blit(right, (sx + left.get_width() + gap, sy))
+    dcx = sx + left.get_width() + gap // 2
+    dcy = sy + left.get_height() // 2
+    pygame.draw.polygon(screen, MENU_PINK, [(dcx, dcy - 4), (dcx + 4, dcy), (dcx, dcy + 4), (dcx - 4, dcy)])
+
+    # Menu buttons.
+    for i, (item, rect) in enumerate(zip(MENU_ITEMS, get_menu_rects())):
+        selected = i == menu_selected
+        accent = item["accent"]
+        fill = pygame.Surface(rect.size, pygame.SRCALPHA)
+        pygame.draw.rect(fill, (*accent, 55 if selected else 26), fill.get_rect(), border_radius=12)
+        screen.blit(fill, rect)
+        pygame.draw.rect(screen, accent, rect, 3 if selected else 2, border_radius=12)
+        draw_icon(item["icon"], rect.x + 36, rect.centery, 22, accent)
+        label_color = MENU_WHITE if selected else (200, 205, 220)
+        label = menu_font.render(item["label"], True, label_color)
+        screen.blit(label, (rect.x + 70, rect.centery - label.get_height() // 2))
+        draw_key_badge((rect.right - 28, rect.centery), item["key"], MENU_MUTED)
+
+    # Footer.
+    draw_shadow_text(small_font, "BUILD 0x8B - v0.8.1", MENU_MUTED, (40, SCREEN_HEIGHT - 44))
+    online = small_font.render("ONLINE", True, MENU_GREEN)
+    ocx = SCREEN_WIDTH // 2
+    pygame.draw.circle(screen, MENU_GREEN, (ocx - online.get_width() // 2 - 12, SCREEN_HEIGHT - 36), 4)
+    screen.blit(online, (ocx - online.get_width() // 2, SCREEN_HEIGHT - 44))
+    score = small_font.render("HISCORE 048210", True, MENU_MUTED)
+    scx = SCREEN_WIDTH - score.get_width() - 40
+    screen.blit(score, (scx, SCREEN_HEIGHT - 44))
+    pygame.draw.polygon(screen, GOLD, [
+        (scx - 16, SCREEN_HEIGHT - 36), (scx - 13, SCREEN_HEIGHT - 30),
+        (scx - 19, SCREEN_HEIGHT - 30)])
+
+
+def draw_catalog_screen():
+    draw_menu_background()
+    screen.blit(menu_title_font.render("CATALOG", True, MENU_PINK),
+                draw_glow_title("CATALOG", MENU_PINK, (SCREEN_WIDTH // 2, int(SCREEN_HEIGHT * 0.12))))
+
+    cards = PIECE_POWER_CARDS + GENERAL_CARDS
+    col_w = int(SCREEN_WIDTH * 0.42)
+    x0 = (SCREEN_WIDTH - col_w * 2 - 50) // 2
+    y0 = int(SCREEN_HEIGHT * 0.24)
+    rows = (len(cards) + 1) // 2
+    line_h = int((SCREEN_HEIGHT * 0.62) / rows)
+
+    for i, name in enumerate(cards):
+        disp, _, desc = CARD_INFO.get(name, (name, (0, 0, 0), ""))
+        cost = CARD_COSTS.get(name, 0)
+        x = x0 + (i % 2) * (col_w + 50)
+        y = y0 + (i // 2) * line_h
+        draw_shadow_text(small_font, f"{disp}  ({cost})", MENU_CYAN, (x, y))
+        draw_shadow_text(tiny_font, clip_text(tiny_font, desc, col_w - 10), MENU_MUTED, (x, y + 20))
+
+    draw_back_hint()
+
+
+def draw_settings_screen():
+    draw_menu_background()
+    screen.blit(menu_title_font.render("SETTINGS", True, MENU_CYAN),
+                draw_glow_title("SETTINGS", MENU_CYAN, (SCREEN_WIDTH // 2, int(SCREEN_HEIGHT * 0.12))))
+
+    x = int(SCREEN_WIDTH * 0.30)
+    y = int(SCREEN_HEIGHT * 0.30)
+    rows = [
+        ("MUSIC", "Off" if music_muted else "On", "M"),
+        ("WHITE PIECES", PIECE_SKINS[white_skin_index]["name"], "1"),
+        ("BLACK PIECES", PIECE_SKINS[black_skin_index]["name"], "2"),
+        ("BOARD", f"#{current_board_index + 1}", "B"),
+    ]
+    for label, value, key in rows:
+        draw_shadow_text(menu_font, label, MENU_WHITE, (x, y))
+        draw_shadow_text(menu_font, value, MENU_CYAN, (x + int(SCREEN_WIDTH * 0.22), y))
+        draw_key_badge((x + int(SCREEN_WIDTH * 0.40), y + menu_font.get_height() // 2), key, MENU_MUTED)
+        y += 48
+
+    y += 24
+    for line in ["IN-GAME KEYS", "R restart    C cheat    T pass turn (cheat)", "ESC return to this menu"]:
+        draw_shadow_text(small_font, line, MENU_MUTED, (x, y))
+        y += 28
+
+    draw_back_hint()
+
+
+def menu_activate(action):
+    global app_state, running, game, dragging_card, dragging_piece
+    if action == "start":
+        game = GameState()
+        dragging_card = None
+        dragging_piece = None
+        app_state = "playing"
+    elif action == "catalog":
+        app_state = "catalog"
+    elif action == "settings":
+        app_state = "settings"
+    elif action == "exit":
+        running = False
+
+
+def handle_menu_events(events):
+    global menu_selected, running
+    rects = get_menu_rects()
+    mx, my = pygame.mouse.get_pos()
+    for i, r in enumerate(rects):
+        if r.collidepoint(mx, my):
+            menu_selected = i
+
+    for event in events:
+        if event.type == pygame.QUIT:
+            running = False
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_UP:
+                menu_selected = (menu_selected - 1) % len(MENU_ITEMS)
+            elif event.key == pygame.K_DOWN:
+                menu_selected = (menu_selected + 1) % len(MENU_ITEMS)
+            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                menu_activate(MENU_ITEMS[menu_selected]["action"])
+            elif event.key == pygame.K_c:
+                menu_activate("catalog")
+            elif event.key == pygame.K_s:
+                menu_activate("settings")
+            elif event.key in (pygame.K_q, pygame.K_ESCAPE):
+                menu_activate("exit")
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            for i, r in enumerate(rects):
+                if r.collidepoint(event.pos):
+                    menu_activate(MENU_ITEMS[i]["action"])
+
+
+def handle_catalog_events(events):
+    global app_state, running
+    for event in events:
+        if event.type == pygame.QUIT:
+            running = False
+        elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+            app_state = "menu"
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            app_state = "menu"
+
+
+def handle_settings_events(events):
+    global app_state, running, music_muted, white_skin_index, black_skin_index
+    global current_board_index, BOARD_IMAGE, BOARD_IMAGE_OX, BOARD_IMAGE_OY, LIGHT_SQUARE, DARK_SQUARE
+    for event in events:
+        if event.type == pygame.QUIT:
+            running = False
+        elif event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+                app_state = "menu"
+            elif event.key == pygame.K_m and _audio_ok:
+                music_muted = not music_muted
+                pygame.mixer.music.set_volume(0.0 if music_muted else 0.5)
+            elif event.key == pygame.K_1:
+                white_skin_index = (white_skin_index + 1) % len(PIECE_SKINS)
+            elif event.key == pygame.K_2:
+                black_skin_index = (black_skin_index + 1) % len(PIECE_SKINS)
+            elif event.key == pygame.K_b:
+                current_board_index = (current_board_index + 1) % len(BOARD_FILES)
+                BOARD_IMAGE, BOARD_IMAGE_OX, BOARD_IMAGE_OY, LIGHT_SQUARE, DARK_SQUARE = (
+                    load_pixel_board(BOARD_FILES[current_board_index])
+                )
+
+
 # -----------------------------
 # Main loop
 # -----------------------------
+start_music()
+music_muted = False
 running = True
 
 while running:
+    # Menu / catalog / settings run as their own self-contained frames.
+    if app_state != "playing":
+        events = pygame.event.get()
+        if app_state == "menu":
+            handle_menu_events(events)
+            draw_start_screen()
+        elif app_state == "catalog":
+            handle_catalog_events(events)
+            draw_catalog_screen()
+        elif app_state == "settings":
+            handle_settings_events(events)
+            draw_settings_screen()
+        display.fill((0, 0, 0))
+        display.blit(screen, (0, 0))
+        pygame.display.flip()
+        clock.tick(60)
+        continue
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
 
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
-                running = False
+                app_state = "menu"
 
             elif event.key == pygame.K_r:
                 game = GameState()
                 dragging_card = None
                 dragging_piece = None
+
+            elif event.key == pygame.K_m and _audio_ok:
+                music_muted = not music_muted
+                pygame.mixer.music.set_volume(0.0 if music_muted else 0.5)
+                game.status_message = "Music muted." if music_muted else "Music on."
+
+            elif event.key == pygame.K_1:
+                white_skin_index = (white_skin_index + 1) % len(PIECE_SKINS)
+                game.status_message = f"White pieces: {PIECE_SKINS[white_skin_index]['name']}"
+
+            elif event.key == pygame.K_2:
+                black_skin_index = (black_skin_index + 1) % len(PIECE_SKINS)
+                game.status_message = f"Black pieces: {PIECE_SKINS[black_skin_index]['name']}"
+
+            elif event.key == pygame.K_b:
+                current_board_index = (current_board_index + 1) % len(BOARD_FILES)
+                BOARD_IMAGE, BOARD_IMAGE_OX, BOARD_IMAGE_OY, LIGHT_SQUARE, DARK_SQUARE = (
+                    load_pixel_board(BOARD_FILES[current_board_index])
+                )
+                game.status_message = f"Board color #{current_board_index + 1}"
 
             elif event.key == pygame.K_c:
                 game.cheat_mode = not game.cheat_mode
@@ -3142,6 +4027,21 @@ while running:
                 elif clicked_card == "chrisma":
                     game.activate_chrisma()
 
+                elif clicked_card == "nope":
+                    game.activate_nope()
+
+                elif clicked_card == "communism":
+                    game.activate_communism()
+
+                elif clicked_card == "propaganda":
+                    game.activate_propaganda()
+
+                elif clicked_card == "ifeelsafe":
+                    game.activate_ifeelsafe()
+
+                elif clicked_card == "iguess":
+                    game.activate_iguess()
+
                 else:
                     dragging_card = clicked_card
 
@@ -3195,6 +4095,9 @@ while running:
                     elif dragging_card == "inzone":
                         game.activate_inzone_on_square(row, col)
 
+                    elif dragging_card == "gambit":
+                        game.activate_gambit_on_square(row, col)
+
                 else:
                     game.status_message = "Drop the card on a valid piece."
 
@@ -3241,12 +4144,39 @@ while running:
     draw_board()
     draw_fire_tiles()
     draw_pieces()
+    draw_card_target_hints()
     draw_animations()
     draw_game_over_overlay()
     draw_sidebar()
     draw_dragging_card()
     draw_dragging_piece()
     draw_info_panel()
+
+    # Armageddon ambience: the sky darkens and the screen trembles as the
+    # meteor falls, then a flash clears the dark and a hard jolt hits on impact.
+    meteor = next((a for a in animations if a["kind"] == "meteor_sprite"), None)
+    shake_amp = 0
+    if meteor is not None:
+        p = 1 - meteor["frames"] / meteor["max_frames"]
+        if p < 0.4:  # falling: build the gloom and a low tremor
+            veil = int(170 * (p / 0.4))
+            shake_amp = 1 + int(4 * (p / 0.4))
+        elif p < 0.5:  # impact: flash clears the dark, hardest shake
+            veil = int(170 * (1 - (p - 0.4) / 0.1))
+            shake_amp = int(16 * (1 - (p - 0.4) / 0.1))
+        else:
+            veil = 0
+        if veil > 0:
+            gloom = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            gloom.fill((0, 0, 0, veil))
+            screen.blit(gloom, (0, 0))
+
+    # Present the frame, offset by the shake (black shows at the bared edges).
+    display.fill((0, 0, 0))
+    if shake_amp > 0:
+        display.blit(screen, (random.randint(-shake_amp, shake_amp), random.randint(-shake_amp, shake_amp)))
+    else:
+        display.blit(screen, (0, 0))
 
     pygame.display.flip()
     clock.tick(60)
