@@ -72,11 +72,11 @@ HAND_RESERVE = int(SCREEN_HEIGHT * 0.225)
 TRAY_HEIGHT = HAND_RESERVE
 TRAY_Y = SCREEN_HEIGHT - HAND_RESERVE
 
-CARD_HEIGHT = int(SCREEN_HEIGHT * 0.20)
+CARD_HEIGHT = int(SCREEN_HEIGHT * 0.235)
 CARD_WIDTH = int(CARD_HEIGHT / CARD_ASPECT)
 TRAY_COLS = max(1, (SCREEN_WIDTH - 2 * SIDE_MARGIN) // (CARD_WIDTH + PANEL_PAD))
 ARC_LIFT = int(CARD_HEIGHT * 0.10)  # how high the middle of the fan rises
-ACTION_BTN_W = 156  # End Turn / Discard buttons flanking the hand
+ACTION_BTN_W = 210  # End Turn / Discard buttons flanking the hand
 
 # Info bar pinned to the very top; the board fills the space between them.
 INFO_Y = 0
@@ -88,7 +88,11 @@ BOARD_AREA_HEIGHT = (TRAY_Y - BOARD_MARGIN) - BOARD_AREA_TOP
 # vertical budget per square width is 8 rows * 0.75 = 6, plus 1.25 headroom for
 # the back-rank sprites. The board's bottom lip is allowed to tuck behind the
 # hand cards, so it is not reserved here.
+# BOARD_SCALE shrinks the board below the space it could fill, leaving more
+# room around it (which the dimmed backdrop and larger hand cards fill).
+BOARD_SCALE = 0.84
 SQUARE_W = min(BOARD_AREA_WIDTH // COLS, int(BOARD_AREA_HEIGHT / 7.25))
+SQUARE_W = int(SQUARE_W * BOARD_SCALE)
 SQUARE_W -= SQUARE_W % 4
 SQUARE_H = SQUARE_W * 3 // 4
 SQUARE_SIZE = SQUARE_W  # piece sprites and effect sizes scale off the square width
@@ -98,9 +102,11 @@ BOARD_H = SQUARE_H * ROWS
 PIECE_HEADROOM = SQUARE_W * 2 - SQUARE_H
 
 BOARD_X = SIDE_MARGIN + max(0, (BOARD_AREA_WIDTH - BOARD_W) // 2)
+# BOARD_LIFT raises the board above its centered position (bigger = higher).
+BOARD_LIFT = 80
 BOARD_Y = BOARD_AREA_TOP + PIECE_HEADROOM + max(
     0, (BOARD_AREA_HEIGHT - PIECE_HEADROOM - BOARD_H) // 2
-)
+) - BOARD_LIFT
 
 WIDTH = SCREEN_WIDTH
 HEIGHT = SCREEN_HEIGHT
@@ -159,7 +165,10 @@ badge_font = load_font(20, 16, bold=True)
 menu_title_font = load_font(96, 64, bold=True)
 menu_font = load_font(32, 26, bold=True)
 home_title_font = load_font(160, 120, bold=True)  # big CHESSBYTE logo
-menu_option_font = load_font(48, 36, bold=True)   # START / CATALOG / ...
+menu_option_font = load_font(40, 30, bold=True)   # START / CATALOG / ...
+subtitle_font = load_font(26, 20, bold=True)      # DEAL . DEPLOY . CHECKMATE
+hint_font = load_font(22, 18, bold=True)          # footer controls hint
+action_font = load_font(32, 24, bold=True)        # END TURN / DISCARD buttons
 
 TEXT_SHADOW_COLOR = (24, 13, 8)
 
@@ -365,7 +374,7 @@ PIECE_SKINS = [
     {"name": "Red", "spec": ("tint", (200, 55, 55))},
     {"name": "Gold", "spec": ("tint", (230, 185, 70))},
 ]
-white_skin_index = 0  # Ivory
+white_skin_index = 2  # Wood
 black_skin_index = 1  # Onyx
 
 # -----------------------------
@@ -703,6 +712,10 @@ def draw_floating_cards():
         screen.blit(rotated, rotated.get_rect(center=(int(card["x"]), int(card["y"]))))
 
 
+BG_DIM = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+BG_DIM.fill((0, 0, 0, 120))  # gameplay backdrop dim; board/pieces/cards draw on top
+
+
 def draw_background():
     if BACKGROUND_IMAGE is not None:
         screen.blit(BACKGROUND_IMAGE, (0, 0))
@@ -710,6 +723,8 @@ def draw_background():
         screen.fill((0, 0, 0))
 
     draw_floating_cards()
+    # Darken the backdrop so the board and hand (drawn afterwards) stand out.
+    screen.blit(BG_DIM, (0, 0))
 
 
 def draw_animations():
@@ -3421,7 +3436,7 @@ def draw_card_preview(owner, card_name, card_rect):
 
 def get_action_buttons():
     # Discard on the left of the hand, End Turn on the right.
-    bw, bh = ACTION_BTN_W, 60
+    bw, bh = ACTION_BTN_W, 84
     cy = TRAY_Y + TRAY_HEIGHT // 2
     discard = pygame.Rect(SIDE_MARGIN, cy - bh // 2, bw, bh)
     end_turn = pygame.Rect(SCREEN_WIDTH - SIDE_MARGIN - bw, cy - bh // 2, bw, bh)
@@ -3438,7 +3453,7 @@ def draw_sidebar():
     mouse_pos = pygame.mouse.get_pos()
     meta = {
         "discard": (f"DISCARD {n_marked}" if n_marked else "DISCARD",
-                    (210, 110, 70) if n_marked else (110, 100, 110),
+                    (235, 45, 45) if n_marked else (200, 70, 70),
                     f"Pile {len(game.discard[game.turn])}"),
         "end_turn": ("END TURN", (90, 200, 120), f"Deck {len(game.deck[game.turn])}"),
     }
@@ -3449,8 +3464,8 @@ def draw_sidebar():
         fill.fill((*color, 75 if hot else 38))
         screen.blit(fill, brect)
         pygame.draw.rect(screen, color, brect, 3 if hot else 2, border_radius=10)
-        lx = brect.centerx - badge_font.size(label)[0] // 2
-        draw_shadow_text(badge_font, label, color, (lx, brect.centery - badge_font.get_height() // 2), offset=1)
+        lx = brect.centerx - action_font.size(label)[0] // 2
+        draw_shadow_text(action_font, label, color, (lx, brect.centery - action_font.get_height() // 2), offset=2)
         sx = brect.centerx - tiny_font.size(sub)[0] // 2
         draw_shadow_text(tiny_font, sub, MUTED_TEXT, (sx, brect.bottom + 4), offset=1)
 
@@ -3639,6 +3654,9 @@ MENU_PINK = (242, 96, 176)
 MENU_WHITE = (236, 240, 248)
 MENU_MUTED = (122, 112, 154)
 MENU_GREEN = (96, 230, 136)
+MENU_GOLD = (240, 188, 40)        # CHESSBYTE "BYTE" + selected button
+MENU_GOLD_DARK = (40, 30, 6)      # text on top of the gold button
+MENU_RED = (224, 104, 92)         # EXIT label
 
 app_state = "menu"  # "menu" | "playing" | "catalog" | "settings"
 menu_selected = 0
@@ -3688,10 +3706,10 @@ def start_new_game():
     dragging_piece = None
 
 MENU_ITEMS = [
-    {"label": "START", "action": "start", "icon": "pawn", "key": "enter", "accent": MENU_CYAN},
-    {"label": "CATALOG", "action": "catalog", "icon": "club", "key": "C", "accent": MENU_PINK},
-    {"label": "SETTINGS", "action": "settings", "icon": "gear", "key": "S", "accent": MENU_CYAN},
-    {"label": "EXIT", "action": "exit", "icon": "x", "key": "Q", "accent": MENU_PINK},
+    {"label": "START", "action": "start", "icon": "pawn", "key": "enter", "accent": MENU_GOLD},
+    {"label": "CATALOG", "action": "catalog", "icon": "spade", "key": "C", "accent": MENU_WHITE},
+    {"label": "SETTINGS", "action": "settings", "icon": "gear", "key": "S", "accent": MENU_WHITE},
+    {"label": "EXIT", "action": "exit", "icon": "x", "key": "Q", "accent": MENU_RED},
 ]
 
 
@@ -3786,10 +3804,10 @@ def draw_glow_title(text, color, center):
 
 
 def get_menu_rects():
-    bw = int(min(640, SCREEN_WIDTH * 0.44))
-    bh = max(72, int(SCREEN_HEIGHT * 0.092))
-    gap = max(14, int(SCREEN_HEIGHT * 0.024))
-    top = int(SCREEN_HEIGHT * 0.42)
+    bw = int(min(560, SCREEN_WIDTH * 0.46))
+    bh = max(58, int(SCREEN_HEIGHT * 0.094))
+    gap = max(10, int(SCREEN_HEIGHT * 0.018))
+    top = int(SCREEN_HEIGHT * 0.46)
     x = (SCREEN_WIDTH - bw) // 2
     return [pygame.Rect(x, top + i * (bh + gap), bw, bh) for i in range(len(MENU_ITEMS))]
 
@@ -3798,71 +3816,118 @@ def draw_back_hint():
     draw_shadow_text(small_font, "ESC  BACK", MENU_MUTED, (40, SCREEN_HEIGHT - 44))
 
 
+def spaced_word_width(font_obj, text, spacing):
+    return sum(font_obj.size(ch)[0] for ch in text) + spacing * (len(text) - 1)
+
+
+def draw_spaced_word(font_obj, text, color, x, y, spacing):
+    # Render letter-spaced text starting at x; returns the width used.
+    start = x
+    for ch in text:
+        g = font_obj.render(ch, True, color)
+        screen.blit(g, (x, y))
+        x += g.get_width() + spacing
+    return x - spacing - start
+
+
+def draw_tagline(font_obj, words, color, center_x, y, letter_spacing=5, sep_gap=30):
+    # Letter-spaced words separated by small diamond markers (the pixel font has
+    # no middle-dot glyph, so the separators are drawn by hand).
+    widths = [spaced_word_width(font_obj, w, letter_spacing) for w in words]
+    total = sum(widths) + sep_gap * (len(words) - 1)
+    x = center_x - total // 2
+    cy = y + font_obj.get_height() // 2
+    for i, w in enumerate(words):
+        draw_spaced_word(font_obj, w, color, x, y, letter_spacing)
+        x += widths[i]
+        if i < len(words) - 1:
+            dcx = x + sep_gap // 2
+            pygame.draw.polygon(screen, color, [
+                (dcx, cy - 4), (dcx + 4, cy), (dcx, cy + 4), (dcx - 4, cy)])
+            x += sep_gap
+
+
 def draw_start_screen():
     draw_menu_background()
 
-    # Decorative neon cards.
-    #draw_neon_card(SCREEN_WIDTH - 110, int(SCREEN_HEIGHT * 0.26), MENU_CYAN, "spade")
-    #draw_neon_card(SCREEN_WIDTH - 150, int(SCREEN_HEIGHT * 0.62), MENU_PINK, "heart")
-
-    # Title: CHESS (white) + BYTE (teal), with a cyan halo.
+    # Title: CHESS (white) + BYTE (gold), with a soft outline so it reads on the
+    # busy galaxy background.
     chess = home_title_font.render("CHESS", True, MENU_WHITE)
-    byte = home_title_font.render("BYTE", True, MENU_CYAN)
+    byte = home_title_font.render("BYTE", True, MENU_GOLD)
     total_w = chess.get_width() + byte.get_width()
     tx = (SCREEN_WIDTH - total_w) // 2
-    ty = int(SCREEN_HEIGHT * 0.06)
-    halo = home_title_font.render("CHESSBYTE", True, MENU_CYAN)
-    for ox, oy in ((-4, 0), (4, 0), (0, -4), (0, 4)):
-        ghost = halo.copy()
-        ghost.set_alpha(55)
+    ty = int(SCREEN_HEIGHT * 0.04)
+    outline = home_title_font.render("CHESSBYTE", True, (0, 0, 0))
+    for ox, oy in ((-3, 0), (3, 0), (0, -3), (0, 3), (-3, -3), (3, 3), (3, -3), (-3, 3)):
+        ghost = outline.copy()
+        ghost.set_alpha(150)
         screen.blit(ghost, (tx + ox, ty + oy))
     screen.blit(chess, (tx, ty))
     screen.blit(byte, (tx + chess.get_width(), ty))
 
-    # Subtitle with a small diamond separator.
-    #left = small_font.render("ROGUELIKE", True, MENU_PINK)
-    #right = small_font.render("POWER-UP CHESS", True, MENU_PINK)
-    gap = 34
-    #sub_w = left.get_width() + gap + right.get_width()
-    #sx = (SCREEN_WIDTH - sub_w) // 2
-    sy = ty + chess.get_height() + 12
-    #screen.blit(left, (sx, sy))
-    #screen.blit(right, (sx + left.get_width() + gap, sy))
-    #dcx = sx + left.get_width() + gap // 2
-    #dcy = sy + left.get_height() // 2
-    #pygame.draw.polygon(screen, MENU_PINK, [(dcx, dcy - 4), (dcx + 4, dcy), (dcx, dcy + 4), (dcx - 4, dcy)])
+    # Subtitle: spaced caps tagline under the logo.
+    sy = ty + chess.get_height() - 6
+    #draw_tagline(subtitle_font, ["DEAL", "DEPLOY", "CHECKMATE"],
+    #             MENU_WHITE, SCREEN_WIDTH // 2, sy)
 
-    # Menu buttons: chunky black Balatro-style buttons with big white labels.
+    # Menu buttons: flat rounded bars with a left-aligned label. The selected
+    # one is a filled gold bar with dark text and a glow; the rest are dark glass.
     for i, (item, rect) in enumerate(zip(MENU_ITEMS, get_menu_rects())):
         selected = i == menu_selected
+        accent = item["accent"]
 
-        # Chunky 3D bottom edge.
-        pygame.draw.rect(screen, (0, 0, 0), rect.move(0, 7), border_radius=16)
-        face = (26, 26, 34) if selected else (8, 8, 12)
-        pygame.draw.rect(screen, face, rect, border_radius=16)
-        border = (255, 255, 255) if selected else (95, 95, 115)
-        pygame.draw.rect(screen, border, rect, 4 if selected else 2, border_radius=16)
+        if selected:
+            # Outer glow halo behind the gold bar.
+            glow = pygame.Surface((rect.w + 24, rect.h + 24), pygame.SRCALPHA)
+            pygame.draw.rect(glow, (*accent, 70), glow.get_rect(), border_radius=12)
+            screen.blit(glow, (rect.x - 12, rect.y - 12))
+            pygame.draw.rect(screen, accent, rect, border_radius=8)
+            pygame.draw.rect(screen, (255, 232, 150), rect, 3, border_radius=8)
+            text_color = MENU_GOLD_DARK
+        else:
+            panel = pygame.Surface((rect.w, rect.h), pygame.SRCALPHA)
+            pygame.draw.rect(panel, (10, 10, 14, 175), panel.get_rect(), border_radius=8)
+            screen.blit(panel, rect)
+            pygame.draw.rect(screen, (70, 70, 86), rect, 2, border_radius=8)
+            text_color = accent if accent == MENU_RED else (228, 228, 238)
 
         label = item["label"]
-        lx = rect.centerx - menu_option_font.size(label)[0] // 2
+        lx = rect.x + 28
         ly = rect.centery - menu_option_font.get_height() // 2
         if selected:
-            draw_wavy_text(menu_option_font, label, (255, 255, 255), (lx, ly), amp=3, offset=3)
+            draw_shadow_text(menu_option_font, label, text_color, (lx, ly), offset=0)
         else:
-            draw_shadow_text(menu_option_font, label, (236, 236, 246), (lx, ly), offset=3)
+            draw_shadow_text(menu_option_font, label, text_color, (lx, ly), offset=2)
 
-    # Footer.
-    draw_shadow_text(small_font, "BUILD 0x8B - v0.8.1", MENU_MUTED, (40, SCREEN_HEIGHT - 44))
-    online = small_font.render("ONLINE", True, MENU_GREEN)
-    ocx = SCREEN_WIDTH // 2
-    pygame.draw.circle(screen, MENU_GREEN, (ocx - online.get_width() // 2 - 12, SCREEN_HEIGHT - 36), 4)
-    screen.blit(online, (ocx - online.get_width() // 2, SCREEN_HEIGHT - 44))
-    score = small_font.render("HISCORE 048210", True, MENU_MUTED)
-    scx = SCREEN_WIDTH - score.get_width() - 40
-    screen.blit(score, (scx, SCREEN_HEIGHT - 44))
-    pygame.draw.polygon(screen, GOLD, [
-        (scx - 16, SCREEN_HEIGHT - 36), (scx - 13, SCREEN_HEIGHT - 30),
-        (scx - 19, SCREEN_HEIGHT - 30)])
+    # Footer: version on the left, controls hint on the right.
+    draw_shadow_text(small_font, "v0.8.1", GOLD, (40, SCREEN_HEIGHT - 40))
+
+    # Controls hint "[^v] SELECT  .  [enter] CONFIRM" with hand-drawn arrows
+    # (the pixel font has no arrow/dot glyphs).
+    sel = hint_font.render("SELECT", True, MENU_WHITE)
+    conf = hint_font.render("CONFIRM", True, MENU_WHITE)
+    arrows_w, gap1, dot_w, gap2, enter_w = 26, 8, 22, 8, 22
+    total = arrows_w + gap1 + sel.get_width() + dot_w + enter_w + gap2 + conf.get_width()
+    x = SCREEN_WIDTH - total - 40
+    cy = SCREEN_HEIGHT - 40 + hint_font.get_height() // 2
+
+    # Up + down arrows, side by side.
+    pygame.draw.polygon(screen, MENU_WHITE, [(x + 5, cy - 7), (x + 1, cy), (x + 9, cy)])
+    pygame.draw.rect(screen, MENU_WHITE, (x + 4, cy, 3, 7))
+    pygame.draw.polygon(screen, MENU_WHITE, [(x + 19, cy + 7), (x + 15, cy), (x + 23, cy)])
+    pygame.draw.rect(screen, MENU_WHITE, (x + 18, cy - 7, 3, 7))
+    x += arrows_w + gap1
+    screen.blit(sel, (x, SCREEN_HEIGHT - 40))
+    x += sel.get_width()
+    # Diamond separator.
+    pygame.draw.polygon(screen, MENU_MUTED, [
+        (x + dot_w // 2, cy - 4), (x + dot_w // 2 + 4, cy),
+        (x + dot_w // 2, cy + 4), (x + dot_w // 2 - 4, cy)])
+    x += dot_w
+    # Enter / return arrow.
+    draw_enter_arrow(x + 11, cy, MENU_WHITE)
+    x += enter_w + gap2
+    screen.blit(conf, (x, SCREEN_HEIGHT - 40))
 
 
 def draw_catalog_screen():
