@@ -1265,10 +1265,12 @@ class GameState:
             return
         self._effects_applied_for = self.turn
 
-        # Draw the cards owed from discarding on the previous turn.
-        if self.pending_draw[self.turn] > 0:
-            self.draw_cards(self.turn, self.pending_draw[self.turn])
-            self.pending_draw[self.turn] = 0
+        # Refill the hand back up to the starting size each turn, replacing any
+        # cards played or discarded, so the player always begins with a full hand.
+        self.pending_draw[self.turn] = 0
+        deficit = self.HAND_START - len(self.hand[self.turn])
+        if deficit > 0:
+            self.draw_cards(self.turn, deficit)
 
         # AbsoluteProtection expires when the protected player gets the turn back.
         if self.turn in self.absolute_protection_active:
