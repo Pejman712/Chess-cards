@@ -639,6 +639,52 @@ def add_animation(kind, squares=None, text="", color=(255, 220, 120), frames=30,
     })
 
 
+# --- Card draw / discard flight animations (screen-space) -------------------
+def _deck_pile_pos():
+    b = get_action_buttons()["end_turn"]
+    return (b.centerx, b.top - 4)
+
+
+def _discard_pile_pos():
+    b = get_action_buttons()["discard"]
+    return (b.centerx, b.top - 4)
+
+
+def _hand_center_pos():
+    return (SCREEN_WIDTH // 2, TRAY_Y + TRAY_HEIGHT // 2)
+
+
+def spawn_draw_fly(target, index, card_name):
+    # A face-down card flies from the deck pile into its hand slot, staggered.
+    add_animation("card_fly", frames=16, extra={
+        "from": _deck_pile_pos(), "to": target,
+        "owner": None, "card": None, "reveal": card_name, "delay": index * 4,
+    })
+
+
+def cards_in_flight():
+    # Names of cards still flying in from the deck (hidden in the hand until they land).
+    return {a["extra"].get("reveal") for a in animations
+            if a["kind"] == "card_fly" and a["extra"].get("reveal")}
+
+
+def animate_initial_hand():
+    # Fly the already-dealt starting hand in from the deck, one card per slot.
+    rects = get_card_rects()
+    for i, card in enumerate(game.hand[game.turn]):
+        r = rects.get(card)
+        target = r.center if r is not None else _hand_center_pos()
+        spawn_draw_fly(target, i, card)
+
+
+def spawn_discard_fly(from_center, owner, card_name):
+    # The played/discarded card flies from its hand slot to the discard pile.
+    add_animation("card_fly", frames=15, extra={
+        "from": from_center, "to": _discard_pile_pos(),
+        "owner": owner, "card": card_name, "delay": 0,
+    })
+
+
 # A handful of faint card images drift across the background with random
 # position, velocity, rotation and spin.
 FLOATING_CARD_COUNT = 30
@@ -940,6 +986,44 @@ def draw_animations():
                 screen.blit(grown, grown.get_rect(midbottom=(tcx, ty + SQUARE_H - SQUARE_H // 12)))
                 rings(tcx, ty + SQUARE_H // 2, int(SQUARE_W * 0.55 * (1 - t)), int(220 * t))
 
+        elif anim["kind"] == "card_fly":
+            ex = anim["extra"]
+            if ex.get("delay", 0) > 0:
+                ex["delay"] -= 1
+                continue  # held until its stagger delay elapses
+
+            t = 1 - anim["frames"] / anim["max_frames"]
+            te = 1 - (1 - t) ** 2  # ease-out toward the target
+            fx, fy = ex["from"]
+            tx, ty = ex["to"]
+            cx = int(fx + (tx - fx) * te)
+            cy = int(fy + (ty - fy) * te)
+
+            w = max(40, int(CARD_WIDTH * 0.5))
+            h = max(56, int(CARD_HEIGHT * 0.5))
+
+            # Fade in at the start. Discards fade out as they reach the pile;
+            # draws stay opaque so they "become" the card landing in the hand.
+            is_draw = ex.get("card") is None
+            if t < 0.2:
+                a = t / 0.2
+            elif (not is_draw) and t > 0.7:
+                a = max(0.0, (1 - t) / 0.3)
+            else:
+                a = 1.0
+            alpha = int(255 * a)
+
+            if ex.get("card"):
+                face = get_card_face(ex["owner"], ex["card"], (w, h), False, True).copy()
+                face.set_alpha(alpha)
+                screen.blit(face, face.get_rect(center=(cx, cy)))
+            else:
+                back = pygame.Surface((w, h), pygame.SRCALPHA)
+                pygame.draw.rect(back, (28, 24, 40, alpha), back.get_rect(), border_radius=6)
+                pygame.draw.rect(back, (*GOLD, alpha), back.get_rect(), 2, border_radius=6)
+                pygame.draw.circle(back, (*GOLD, alpha), (w // 2, h // 2), w // 5, 2)
+                screen.blit(back, back.get_rect(center=(cx, cy)))
+
         anim["frames"] -= 1
         if anim["frames"] <= 0:
             finished.append(anim)
@@ -977,6 +1061,10 @@ class GameState:
         self.discard = {WHITE: [], BLACK: []}
         self.pending_draw = {WHITE: 0, BLACK: 0}
         self.discard_marks = set()  # cards in the current hand marked to discard
+
+        # Running game log shown on the right: chess moves and cards played.
+        # Each entry is (color, kind, text) where kind is "move" or "card".
+        self.move_log = []
 
         # Economy
         self.ether = {
@@ -1075,6 +1163,9 @@ class GameState:
             self.draw_cards(color, self.HAND_START)
 
     def draw_cards(self, color, n):
+        # Only animate draws for the live game and the player whose turn it is.
+        live = globals().get("game") is self and color == self.turn
+        drawn_cards = []
         for _ in range(n):
             if not self.deck[color]:
                 # Reshuffle the discard pile into the deck.
@@ -1083,7 +1174,17 @@ class GameState:
                 random.shuffle(self.deck[color])
             if not self.deck[color]:
                 break  # no cards anywhere
-            self.hand[color].append(self.deck[color].pop())
+            card = self.deck[color].pop()
+            self.hand[color].append(card)
+            drawn_cards.append(card)
+
+        # Fly each new card from the deck pile to its final slot in the hand.
+        if live and drawn_cards:
+            rects = get_card_rects()
+            for i, card in enumerate(drawn_cards):
+                r = rects.get(card)
+                target = r.center if r is not None else _hand_center_pos()
+                spawn_draw_fly(target, i, card)
 
     def spend_card(self, card_name):
         display = CARD_INFO.get(card_name, (card_name,))[0]
@@ -1100,9 +1201,20 @@ class GameState:
         self.save_history()
         self.card_undo[self.turn] = copy.deepcopy(self.history[-1])
         self.ether[self.turn] -= cost
+
+        # Capture the card's hand position to animate it flying to the pile.
+        from_center = None
+        if globals().get("game") is self:
+            r = get_card_rects().get(card_name)
+            if r is not None:
+                from_center = r.center
+
         self.hand[self.turn].remove(card_name)
         self.discard[self.turn].append(card_name)
         self.discard_marks.discard(card_name)
+        self.log_event(self.turn, "card", display)
+        if from_center is not None:
+            spawn_discard_fly(from_center, self.turn, card_name)
         return True
 
     def finish_card(self, message):
@@ -1133,9 +1245,17 @@ class GameState:
 
         if discard_marked:
             marked = [c for c in self.hand[self.turn] if c in self.discard_marks]
+            # Capture all positions first, before the hand layout shifts.
+            live = globals().get("game") is self
+            centers = {}
+            if live:
+                rects = get_card_rects()
+                centers = {c: rects[c].center for c in marked if c in rects}
             for card_name in marked:
                 self.hand[self.turn].remove(card_name)
                 self.discard[self.turn].append(card_name)
+                if card_name in centers:
+                    spawn_discard_fly(centers[card_name], self.turn, card_name)
             self.pending_draw[self.turn] = len(marked)
 
         self.discard_marks = set()
@@ -1517,10 +1637,6 @@ class GameState:
         if self.game_over:
             return
 
-        if self.moves_made_this_turn >= self.moves_allowed():
-            self.status_message = "No moves left this turn. Press END TURN."
-            return
-
         piece = self.board[row][col]
 
         if piece is None or self.piece_color(piece) != self.turn:
@@ -1618,10 +1734,6 @@ class GameState:
         if self.game_over:
             return
 
-        if self.moves_made_this_turn >= self.moves_allowed():
-            self.status_message = "No moves left this turn. Press END TURN."
-            return
-
         if not is_valid_windknight_target(self, row, col):
             self.status_message = "Drop Windknight on one of your knights."
             return
@@ -1647,10 +1759,6 @@ class GameState:
 
     def activate_queentum_on_square(self, row, col):
         if self.game_over:
-            return
-
-        if self.moves_made_this_turn >= self.moves_allowed():
-            self.status_message = "No moves left this turn. Press END TURN."
             return
 
         piece = self.board[row][col]
@@ -2090,10 +2198,6 @@ class GameState:
 
     def activate_inzone_on_square(self, row, col):
         if self.game_over:
-            return
-
-        if self.moves_made_this_turn >= self.moves_allowed():
-            self.status_message = "No moves left this turn. Press END TURN."
             return
 
         piece = self.board[row][col]
@@ -2550,6 +2654,20 @@ class GameState:
     # -----------------------------
     # Making moves
     # -----------------------------
+    def log_event(self, color, kind, text):
+        self.move_log.append((color, kind, text))
+        if len(self.move_log) > 200:
+            del self.move_log[:-200]
+
+    @staticmethod
+    def square_name(row, col):
+        return f"{'abcdefgh'[col]}{8 - row}"
+
+    def move_notation(self, piece, from_square, to_square, captured_piece):
+        letter = piece.upper()  # P, N, B, R, Q, K (piece-type only)
+        sep = "x" if captured_piece is not None else "-"
+        return f"{letter} {self.square_name(*from_square)}{sep}{self.square_name(*to_square)}"
+
     def make_move(self, from_square, to_square, test_mode=False):
         from_row, from_col = from_square
         to_row, to_col = to_square
@@ -2568,6 +2686,9 @@ class GameState:
             # A normal move makes this player's last action a move, not a card,
             # so the opponent's Nope can no longer cancel a card here.
             self.card_undo[self.piece_color(piece)] = None
+            self.log_event(self.piece_color(piece), "move",
+                           self.move_notation(piece, original_from_square,
+                                              original_to_square, captured_piece))
 
         color = self.piece_color(piece)
         piece_type = piece.lower()
@@ -3474,9 +3595,10 @@ def draw_sidebar():
     card_rects = get_card_rects()
     mouse_pos = pygame.mouse.get_pos()
     hovered = None
+    flight = cards_in_flight()  # cards still flying in from the deck stay hidden
 
     for card_name, rect in card_rects.items():
-        if dragging_card == card_name:
+        if dragging_card == card_name or card_name in flight:
             continue
 
         draw_single_card(rect, game.turn, card_name)
@@ -3566,6 +3688,48 @@ def draw_ether_chip(label, amount, color, is_active, topleft):
     text = f"{label}  {amount} Ether"
     text_color = TEXT_COLOR if is_active else MUTED_TEXT
     draw_shadow_text(tiny_font, text, text_color, (chip.x + 34, chip.centery - tiny_font.get_height() // 2), offset=1)
+
+
+def draw_move_log():
+    # Running log on the right of the board: chess moves and cards played.
+    btns = get_action_buttons()
+    # Narrow panel hugging the right edge, aligned above the End Turn button.
+    right = SCREEN_WIDTH - SIDE_MARGIN
+    #left = max(BOARD_X + BOARD_W + 50, btns["end_turn"].left)
+    left = 1600
+    top = INFO_HEIGHT + 14
+    bottom = btns["end_turn"].top - 14
+    if right - left < 120 or bottom - top < 90:
+        return  # not enough room beside the board
+
+    panel = pygame.Rect(left, top, right - left, bottom - top)
+    surf = pygame.Surface(panel.size, pygame.SRCALPHA)
+    surf.fill((10, 10, 16, 185))
+    screen.blit(surf, panel)
+    pygame.draw.rect(screen, (78, 78, 98), panel, 2, border_radius=8)
+
+    draw_shadow_text(small_font, "GAME LOG", GOLD, (panel.x + 14, panel.y + 10), offset=1)
+    sep_y = panel.y + 14 + small_font.get_height()
+    pygame.draw.line(screen, (78, 78, 98), (panel.x + 12, sep_y), (panel.right - 12, sep_y), 1)
+
+    line_h = tiny_font.get_height() + 6
+    text_x = panel.x + 30
+    max_w = panel.right - 12 - text_x
+    list_top = sep_y + 8
+    capacity = max(1, (panel.bottom - 10 - list_top) // line_h)
+    entries = game.move_log[-capacity:]  # newest entries, oldest first
+
+    y = list_top
+    for color, kind, text in entries:
+        swatch = pygame.Rect(panel.x + 12, y + 3, 12, 12)
+        if color == WHITE:
+            pygame.draw.rect(screen, (235, 235, 245), swatch, border_radius=3)
+        else:
+            pygame.draw.rect(screen, (40, 40, 50), swatch, border_radius=3)
+            pygame.draw.rect(screen, (120, 120, 140), swatch, 1, border_radius=3)
+        text_color = GOLD if kind == "card" else (224, 224, 236)
+        draw_shadow_text(tiny_font, clip_text(tiny_font, text, max_w), text_color, (text_x, y), offset=1)
+        y += line_h
 
 
 def draw_info_panel():
@@ -3706,6 +3870,7 @@ def start_new_game():
     game = GameState()
     dragging_card = None
     dragging_piece = None
+    animate_initial_hand()
 
 MENU_ITEMS = [
     {"label": "START", "action": "start", "icon": "pawn", "key": "enter", "accent": MENU_GOLD},
@@ -4113,6 +4278,7 @@ while running:
                 game = GameState()
                 dragging_card = None
                 dragging_piece = None
+                animate_initial_hand()
 
             elif event.key == pygame.K_m and _audio_ok:
                 music_muted = not music_muted
@@ -4335,6 +4501,7 @@ while running:
     draw_card_target_hints()
     draw_animations()
     draw_game_over_overlay()
+    draw_move_log()
     draw_sidebar()
     draw_dragging_card()
     draw_dragging_piece()
