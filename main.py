@@ -457,6 +457,20 @@ CARD_TARGET_TYPE = {
     "gambit": "non_king",
 }
 
+# "Target" cards are dragged onto one of your pieces; "instant" cards take
+# effect as soon as they are played. Every card can also be dragged onto the
+# Discard button to throw it away. Each card's activation method is named
+# activate_<name>_on_square (target) or activate_<name> (instant).
+TARGET_CARDS = {
+    "pawntastic", "bishock", "rookdemon", "windknight", "queentum",
+    "longlivetheking", "armageddon", "thedramatic", "inzone", "gambit",
+}
+INSTANT_CARDS = {
+    "switchero", "prophecy", "capitalism", "plague", "solo", "absoluteprotection",
+    "timetraveler", "extrablood", "chrisma", "nope", "communism", "propaganda",
+    "ifeelsafe", "iguess",
+}
+
 def load_card_image(path):
     try:
         return pygame.image.load(path).convert_alpha()
@@ -598,7 +612,7 @@ CARD_INFO = {
     "inzone": ("InZone", (150, 40, 35), "Chain up to 5 captures; the piece dies after."),
     "nope": ("Nope", (60, 60, 110), "Cancel the opponent's last card; kills the checker if you are in check."),
     "communism": ("Communism", (150, 30, 30), "Split all Ether evenly between both players."),
-    "gambit": ("Gambit", (110, 80, 30), "Sacrifice one of your pieces for double its value in Ether."),
+    "gambit": ("Gambit", (110, 80, 30), "Sacrifice as many of your pieces as you want for double value each."),
     "propaganda": ("Propaganda", (120, 60, 130), "Each of your turns: 50% to convert an enemy piece."),
     "ifeelsafe": ("I Feel Safe", (40, 110, 120), "Passive: end of turn, +3 Ether per piece by your king."),
     "iguess": ("I Guess", (90, 90, 100), "Permanently take 2 extra moves each turn."),
@@ -1062,6 +1076,10 @@ class GameState:
         self.pending_draw = {WHITE: 0, BLACK: 0}
         self.discard_marks = set()  # cards in the current hand marked to discard
 
+        # Each player may discard at most MAX_DISCARDS cards across the whole
+        # game. Discarding is done by dragging a card onto the Discard button.
+        self.discards_used = {WHITE: 0, BLACK: 0}
+
         # Running game log shown on the right: chess moves and cards played.
         # Each entry is (color, kind, text) where kind is "move" or "card".
         self.move_log = []
@@ -1120,6 +1138,11 @@ class GameState:
         # End Turn. moves_made_this_turn tracks how many chess moves were made.
         self.moves_made_this_turn = 0
 
+        # Piece-power abilities (Pawntastic, Queentum, Windknight, InZone) do not
+        # use up the player's normal chess move. This records that the player did
+        # act this turn, so they may End Turn even if they only used an ability.
+        self.ability_used_this_turn = False
+
         # Nope: snapshot of the state just before each player's last game card,
         # so the opponent can cancel it.
         self.card_undo = {WHITE: None, BLACK: None}
@@ -1152,6 +1175,11 @@ class GameState:
     # Deck / hand / discard
     # -----------------------------
     HAND_START = 5
+    MAX_DISCARDS = 5  # per player, for the whole game
+
+    # Cards whose move is a piece "ability" and so does not consume the
+    # player's normal chess move for the turn.
+    ABILITY_CARDS = ("pawntastic", "queentum", "windknight", "inzone")
 
     def deal_starting_hands(self):
         for color in (WHITE, BLACK):
@@ -1217,6 +1245,44 @@ class GameState:
             spawn_discard_fly(from_center, self.turn, card_name)
         return True
 
+    def discard_card(self, card_name):
+        # Drag a card onto the Discard button to throw it away and draw a
+        # replacement. Each player is limited to MAX_DISCARDS for the game.
+        if self.game_over:
+            return False
+
+        display = CARD_INFO.get(card_name, (card_name,))[0]
+
+        if card_name not in self.hand[self.turn]:
+            self.status_message = f"{display} is not in your hand."
+            return False
+
+        if self.discards_used[self.turn] >= self.MAX_DISCARDS:
+            self.status_message = f"No discards left (limit {self.MAX_DISCARDS})."
+            return False
+
+        # Capture the card's hand position to animate it flying to the pile.
+        from_center = None
+        if globals().get("game") is self:
+            r = get_card_rects().get(card_name)
+            if r is not None:
+                from_center = r.center
+
+        self.hand[self.turn].remove(card_name)
+        self.discard[self.turn].append(card_name)
+        self.discard_marks.discard(card_name)
+        self.discards_used[self.turn] += 1
+
+        if from_center is not None:
+            spawn_discard_fly(from_center, self.turn, card_name)
+
+        # Draw a replacement so the hand stays full.
+        self.draw_cards(self.turn, 1)
+
+        left = self.MAX_DISCARDS - self.discards_used[self.turn]
+        self.status_message = f"Discarded {display}. {left} discard(s) left."
+        return True
+
     def finish_card(self, message):
         # A free card effect resolves without ending the turn.
         msg = message.replace("{player}", self.turn.capitalize())
@@ -1229,7 +1295,7 @@ class GameState:
         if not self.is_in_check(self.turn) and not self.game_over:
             self.status_message = msg
 
-    def end_turn(self, discard_marked=False):
+    def end_turn(self):
         if self.game_over:
             return
 
@@ -1238,25 +1304,15 @@ class GameState:
             self.status_message = "Finish the active card move first."
             return
 
-        # The player must make their chess move before the turn can pass.
-        if self.moves_made_this_turn < 1 and self.has_any_legal_moves(self.turn):
+        # The player must act before the turn can pass: either make a chess move
+        # or use a piece ability (abilities do not consume the chess move).
+        if (
+            self.moves_made_this_turn < 1
+            and not self.ability_used_this_turn
+            and self.has_any_legal_moves(self.turn)
+        ):
             self.status_message = "Move a piece before ending your turn."
             return
-
-        if discard_marked:
-            marked = [c for c in self.hand[self.turn] if c in self.discard_marks]
-            # Capture all positions first, before the hand layout shifts.
-            live = globals().get("game") is self
-            centers = {}
-            if live:
-                rects = get_card_rects()
-                centers = {c: rects[c].center for c in marked if c in rects}
-            for card_name in marked:
-                self.hand[self.turn].remove(card_name)
-                self.discard[self.turn].append(card_name)
-                if card_name in centers:
-                    spawn_discard_fly(centers[card_name], self.turn, card_name)
-            self.pending_draw[self.turn] = len(marked)
 
         self.discard_marks = set()
         self.award_check_bonus_for_player(self.turn)
@@ -1317,6 +1373,32 @@ class GameState:
         else:
             self.status_message = f"{self.turn.capitalize()} moved. Press END TURN."
 
+    def finish_ability_move(self):
+        # A piece ability (Pawntastic / Queentum / Windknight / InZone) resolves
+        # WITHOUT consuming the player's normal chess move, so moves_made is left
+        # untouched and the player may still move a piece this turn.
+        self.active_card = None
+        self.active_card_owner = None
+        self.windknight_square = None
+        self.windknight_moves_remaining = 0
+        self.inzone_square = None
+        self.inzone_captures = 0
+        self.selected = None
+        self.legal_moves_for_selected = []
+        self.ability_used_this_turn = True
+
+        if self.moves_made_this_turn < self.moves_allowed():
+            self.status_message = f"{self.turn.capitalize()} used an ability. You may still move a piece, or press END TURN."
+        else:
+            self.status_message = f"{self.turn.capitalize()} used an ability. Press END TURN."
+
+    def _finish_move(self):
+        # Abilities do not use up the chess move; ordinary card/plain moves do.
+        if self.active_card in self.ABILITY_CARDS:
+            self.finish_ability_move()
+        else:
+            self.finish_chess_move()
+
     def pass_turn(self):
         # In cheat mode the turn is frozen so one player can act repeatedly.
         if self.cheat_mode:
@@ -1333,6 +1415,7 @@ class GameState:
 
         self.turn = self.enemy_color(self.turn)
         self.moves_made_this_turn = 0
+        self.ability_used_this_turn = False
 
     def in_bounds(self, row, col):
         return 0 <= row < 8 and 0 <= col < 8
@@ -1505,6 +1588,7 @@ class GameState:
             "deck": copy.deepcopy(self.deck),
             "hand": copy.deepcopy(self.hand),
             "discard": copy.deepcopy(self.discard),
+            "discards_used": copy.deepcopy(self.discards_used),
             "pending_draw": copy.deepcopy(self.pending_draw),
             "ether": copy.deepcopy(self.ether),
             "turn": self.turn,
@@ -1548,6 +1632,7 @@ class GameState:
             self.deck = copy.deepcopy(snapshot["deck"])
             self.hand = copy.deepcopy(snapshot["hand"])
             self.discard = copy.deepcopy(snapshot["discard"])
+            self.discards_used = copy.deepcopy(snapshot.get("discards_used", self.discards_used))
             self.pending_draw = copy.deepcopy(snapshot["pending_draw"])
             if not keep_ether:
                 self.ether = copy.deepcopy(snapshot["ether"])
@@ -1803,7 +1888,53 @@ class GameState:
             return False
 
         king_pos = self.find_king(color)
-        return king_pos is not None
+        if king_pos is None:
+            return False
+
+        return bool(self.safe_escape_corners(king_pos[0], king_pos[1], color))
+
+    def _apply_longlivetheking(self, board, from_square, to_square, color):
+        # Mutate `board` in place: move the king to the corner and spawn pawns
+        # (promoting on the back rank) on every empty neighbouring square.
+        # Returns the number of pawns spawned.
+        from_row, from_col = from_square
+        to_row, to_col = to_square
+
+        if color == WHITE:
+            pawn_piece, queen_piece, promotion_row = "P", "Q", 0
+        else:
+            pawn_piece, queen_piece, promotion_row = "p", "q", 7
+
+        king_piece = board[from_row][from_col]
+        board[to_row][to_col] = king_piece
+        board[from_row][from_col] = None
+
+        spawned = 0
+        for dr in (-1, 0, 1):
+            for dc in (-1, 0, 1):
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = to_row + dr, to_col + dc
+                if self.in_bounds(nr, nc) and board[nr][nc] is None:
+                    board[nr][nc] = queen_piece if nr == promotion_row else pawn_piece
+                    spawned += 1
+
+        return spawned
+
+    def safe_escape_corners(self, king_row, king_col, color):
+        # Corners the king may flee to where it is NOT in check after arriving
+        # (counting the pawns it spawns, which can block incoming attacks).
+        safe = []
+        for corner in get_empty_escape_corners(self):
+            test_board = copy.deepcopy(self.board)
+            self._apply_longlivetheking(test_board, (king_row, king_col), corner, color)
+
+            probe = self.clone()
+            probe.board = test_board
+            if not probe.is_in_check(color):
+                safe.append(corner)
+
+        return safe
 
     def activate_longlivetheking_on_square(self, row, col):
         if self.game_over:
@@ -1823,48 +1954,37 @@ class GameState:
             self.status_message = "LongLiveTheKing only works on kings."
             return
 
-        escape_corner = choose_random_escape_corner(self)
-
-        if escape_corner is None:
+        if not get_empty_escape_corners(self):
             self.status_message = "LongLiveTheKing failed: no empty corner exists."
             return
+
+        # Only flee to a corner where the king is NOT in check after arriving.
+        safe_corners = self.safe_escape_corners(row, col, self.turn)
+        if not safe_corners:
+            self.status_message = "LongLiveTheKing failed: every corner would leave the king in check."
+            return
+
+        escape_corner = random.choice(safe_corners)
 
         if not self.spend_card("longlivetheking"):
             return
 
         from_row, from_col = row, col
         to_row, to_col = escape_corner
-        king_piece = self.board[from_row][from_col]
 
         add_animation("move_line", squares=[(from_row, from_col), (to_row, to_col)], color=(255, 235, 140), frames=40)
-
-        # Move king to the random empty corner.
-        self.board[to_row][to_col] = king_piece
-        self.board[from_row][from_col] = None
 
         # Moving the king disables castling.
         if self.turn == WHITE:
             self.white_king_moved = True
-            pawn_piece = "P"
-            queen_piece = "Q"
-            promotion_row = 0
         else:
             self.black_king_moved = True
-            pawn_piece = "p"
-            queen_piece = "q"
-            promotion_row = 7
 
-        # Spawn pawns around the destination on every empty neighboring square.
-        spawned = 0
-        for pawn_row, pawn_col in get_surrounding_empty_squares(self, to_row, to_col):
-            if pawn_row == promotion_row:
-                self.board[pawn_row][pawn_col] = queen_piece
-            else:
-                self.board[pawn_row][pawn_col] = pawn_piece
-            spawned += 1
+        # Move the king to the safe corner and spawn the pawns around it.
+        spawned = self._apply_longlivetheking(self.board, (from_row, from_col), (to_row, to_col), self.turn)
 
         self.finish_card(
-            f"{{player}} escaped to a random corner and spawned {spawned} pawn(s)."
+            f"{{player}} escaped to a safe corner and spawned {spawned} pawn(s)."
         )
 
 
@@ -1878,47 +1998,57 @@ class GameState:
         if not self.spend_card("switchero"):
             return
 
-        swapped = {
-            "P": "p", "R": "r", "N": "n", "B": "b", "Q": "q", "K": "k",
-            "p": "P", "r": "R", "n": "N", "b": "B", "q": "Q", "k": "K",
-        }
+        # You take over your opponent's army: after the card you own all of
+        # THEIR pieces in THEIR positions, but in YOUR colour and seen from YOUR
+        # side, and they inherit your old army the same way. Concretely this is a
+        # 180-degree rotation of the board (so the enemy formation arrives on
+        # your side, oriented to your view) combined with a colour swap (so the
+        # pieces that land on your side become yours). A piece at (r, c) becomes
+        # the recoloured enemy piece from (7-r, 7-c).
+        def rot(square):
+            return (7 - square[0], 7 - square[1])
 
+        new_board = [[None] * 8 for _ in range(8)]
         affected = []
-
         for row in range(8):
             for col in range(8):
                 piece = self.board[row][col]
                 if piece is not None:
-                    self.board[row][col] = swapped[piece]
-                    affected.append((row, col))
+                    nr, nc = rot((row, col))
+                    new_board[nr][nc] = piece.swapcase()  # rotate, then change owner
+                    affected.append((nr, nc))
+        self.board = new_board
 
-        add_animation("magic", squares=affected, text="SWAP", color=(90, 170, 255), frames=45)
+        # The position-keyed effects travel with the pieces (the rook/piece on a
+        # rotated square is still the same square's effect, just a new owner).
+        self.rookdemon_rooks = {rot(sq): v for sq, v in self.rookdemon_rooks.items()}
+        self.fire_tiles = {rot(sq): v for sq, v in self.fire_tiles.items()}
+        self.dramatic_pieces = {rot(sq) for sq in self.dramatic_pieces}
+        if self.windknight_square is not None:
+            self.windknight_square = rot(self.windknight_square)
+        if self.inzone_square is not None:
+            self.inzone_square = rot(self.inzone_square)
 
-        (
-            self.white_king_moved,
-            self.black_king_moved,
-        ) = (
-            self.black_king_moved,
-            self.white_king_moved,
-        )
+        # Promote any pawn that landed on its promotion rank.
+        for col in range(8):
+            if self.board[0][col] == "P":
+                self.board[0][col] = "Q"
+            if self.board[7][col] == "p":
+                self.board[7][col] = "q"
 
-        (
-            self.white_left_rook_moved,
-            self.black_left_rook_moved,
-        ) = (
-            self.black_left_rook_moved,
-            self.white_left_rook_moved,
-        )
+        # Kings and rooks have all relocated and changed owner, so castling is no
+        # longer available and any en passant window is void.
+        self.white_king_moved = True
+        self.black_king_moved = True
+        self.white_left_rook_moved = True
+        self.white_right_rook_moved = True
+        self.black_left_rook_moved = True
+        self.black_right_rook_moved = True
+        self.en_passant_target = None
 
-        (
-            self.white_right_rook_moved,
-            self.black_right_rook_moved,
-        ) = (
-            self.black_right_rook_moved,
-            self.white_right_rook_moved,
-        )
+        add_animation("magic", squares=affected or [(0, 0)], text="SWAP", color=(90, 170, 255), frames=45)
 
-        self.finish_card("{player} played Switchero. All piece ownership switched.")
+        self.finish_card("{player} seized the enemy army with Switchero.")
 
     def activate_prophecy(self):
         if self.game_over:
@@ -2305,26 +2435,41 @@ class GameState:
         self.finish_card("{player} played Communism. Ether is now shared equally.")
 
     def activate_gambit_on_square(self, row, col):
+        # The first sacrifice pays for the card and arms Gambit; while it stays
+        # active the player can keep clicking their own pieces to sacrifice as
+        # many as they want (see select_square / gambit_sacrifice).
         if self.game_over:
             return
 
-        piece = self.board[row][col]
-
-        if piece is None:
-            self.status_message = "Drop Gambit on one of your pieces."
-            return
-
-        if self.piece_color(piece) != self.turn:
-            self.status_message = "You can only sacrifice your own piece."
-            return
-
-        if piece.lower() == "k":
-            self.status_message = "Gambit cannot sacrifice the king."
+        if not self.gambit_can_sacrifice(row, col):
             return
 
         if not self.spend_card("gambit"):
             return
 
+        self.active_card = "gambit"
+        self.active_card_owner = self.turn
+        self.gambit_sacrifice(row, col)
+
+    def gambit_can_sacrifice(self, row, col):
+        piece = self.board[row][col]
+
+        if piece is None:
+            self.status_message = "Drop Gambit on one of your pieces."
+            return False
+
+        if self.piece_color(piece) != self.turn:
+            self.status_message = "You can only sacrifice your own piece."
+            return False
+
+        if piece.lower() == "k":
+            self.status_message = "Gambit cannot sacrifice the king."
+            return False
+
+        return True
+
+    def gambit_sacrifice(self, row, col):
+        piece = self.board[row][col]
         value = self.get_piece_value(piece) * 2
         self.board[row][col] = None
         self.rookdemon_rooks.pop((row, col), None)
@@ -2336,7 +2481,18 @@ class GameState:
         self.add_ether(self.turn, value)
         add_animation("burst", squares=[(row, col)], text="GAMBIT", color=(200, 150, 60), frames=34)
         add_animation("coin", squares=[(row, col)], text=f"+{value}", color=(255, 220, 90), frames=40)
-        self.finish_card(f"{{player}} sacrificed a piece for {value} Ether.")
+        self.status_message = (
+            f"Gambit: +{value} Ether. Click more pieces to sacrifice, "
+            "or click elsewhere to finish."
+        )
+
+    def gambit_finish(self):
+        # Leave Gambit mode; the player keeps the turn to make their move.
+        self.active_card = None
+        self.active_card_owner = None
+        self.selected = None
+        self.legal_moves_for_selected = []
+        self.update_status()
 
     def activate_propaganda(self):
         if self.game_over:
@@ -2554,6 +2710,11 @@ class GameState:
         legal_moves = []
 
         for move in pseudo_moves:
+            # A king can never be captured, so capturing one is never a legal move.
+            target_piece = self.board[move[0]][move[1]]
+            if target_piece is not None and target_piece.lower() == "k":
+                continue
+
             if piece.lower() == "k" and move in self.fire_tiles:
                 continue
 
@@ -2679,6 +2840,13 @@ class GameState:
         captured_piece = self.board[to_row][to_col]
 
         if piece is None:
+            return
+
+        # Under no circumstances can a king be captured - by a normal move, a
+        # piece ability, or any other mechanic that routes through make_move.
+        if captured_piece is not None and captured_piece.lower() == "k":
+            if not test_mode:
+                self.status_message = "The king cannot be captured."
             return
 
         if not test_mode:
@@ -2888,7 +3056,7 @@ class GameState:
                     self.dramatic_pieces.discard((to_row, to_col))
                     add_animation("burst", squares=[(to_row, to_col)], text="BURNOUT", color=(255, 60, 60), frames=38)
 
-                self.finish_chess_move()
+                self._finish_move()
                 return
 
             if was_windknight_move and moved_piece_survived:
@@ -2903,10 +3071,10 @@ class GameState:
                         self.status_message = "Windknight: move the same knight one more time."
                         return
 
-                self.finish_chess_move()
+                self._finish_move()
                 return
 
-            self.finish_chess_move()
+            self._finish_move()
 
     def update_castling_rights_for_move(self, from_row, from_col, piece):
         piece_type = piece.lower()
@@ -2991,6 +3159,15 @@ class GameState:
                 return
 
             self.status_message = "InZone is active. Capture with the selected piece."
+            return
+
+        if self.active_card == "gambit":
+            # Click your own (non-king) pieces to sacrifice more of them; a click
+            # anywhere else ends Gambit and returns to normal play.
+            if clicked_piece is not None and self.piece_color(clicked_piece) == self.turn and clicked_piece.lower() != "k":
+                self.gambit_sacrifice(row, col)
+            else:
+                self.gambit_finish()
             return
 
         if self.selected is not None:
@@ -3127,12 +3304,16 @@ def get_card_target_squares(card_name):
 
 
 def draw_card_target_hints():
-    # While a piece-targeting card is held, show which of your pieces it can
-    # be dropped on: a soft tint plus pulsing amber corner brackets.
-    if dragging_card is None:
+    # While a piece-targeting card is held - or Gambit is active and waiting for
+    # more sacrifices - show which of your pieces it can target: pulsing amber
+    # corner brackets that blink on and off.
+    card = dragging_card if dragging_card is not None else (
+        "gambit" if game.active_card == "gambit" else None
+    )
+    if card is None:
         return
 
-    squares = get_card_target_squares(dragging_card)
+    squares = get_card_target_squares(card)
     if not squares:
         return
 
@@ -3428,13 +3609,34 @@ def get_card_bob(card_name):
     return round(math.sin(pygame.time.get_ticks() * 0.002 + phase) * 3)
 
 
-def draw_single_card(rect, owner, card_name):
+# How high a card rises and how strongly it dims when not hovered. The eased
+# per-card hover amount (0 resting, 1 hovered) lives in _card_hover_anim and is
+# advanced each frame in draw_sidebar.
+CARD_HOVER_LIFT = int(CARD_HEIGHT * 0.09)
+CARD_REST_DIM = 45  # alpha of the shade laid over a fully-rested card
+_card_hover_anim = {}
+
+
+def draw_single_card(rect, owner, card_name, hover=1.0, lift=0):
     # Cards in hand are always playable (no "used" state in the deck system).
     used = False
-    display_name, _, _ = CARD_INFO.get(card_name, (card_name, (70, 70, 70), ""))
+    display_name, accent, _ = CARD_INFO.get(card_name, (card_name, (70, 70, 70), ""))
     affordable = game.ether[game.turn] >= CARD_COSTS.get(card_name, 0)
 
-    rect = rect.move(0, get_card_bob(card_name))
+    rect = rect.move(0, get_card_bob(card_name) - lift)
+
+    # A halo in the card's general color sits behind it, faint at rest and
+    # blooming as the card lifts on hover. Lighten the accent so it reads as a
+    # glow rather than a dark plate.
+    glow_color = tuple(min(255, c + 100) for c in accent)
+    base = max(2, int(CARD_WIDTH * 0.03))
+    for i in range(3):
+        spread = base + round(base * 0.6 * hover) + i * base
+        alpha = int((90 + 165 * hover) * (1 - i / 3))
+        halo = pygame.Surface((rect.width + spread * 2, rect.height + spread * 2), pygame.SRCALPHA)
+        pygame.draw.rect(halo, (*glow_color, min(255, alpha)), halo.get_rect(), border_radius=16)
+        screen.blit(halo, (rect.x - spread, rect.y - spread))
+
     screen.blit(get_card_face(owner, card_name, rect.size, used, affordable), rect)
 
     # Dim and red-mark cards selected for discard.
@@ -3460,6 +3662,13 @@ def draw_single_card(rect, owner, card_name):
 
     border_color = CARD_DISABLED if used else CARD_BORDER
     pygame.draw.rect(screen, border_color, rect, 2, border_radius=8)
+
+    # Rested cards sit a little dim; they brighten as the cursor lands on them.
+    dim = round(CARD_REST_DIM * (1 - hover))
+    if dim > 0:
+        shade = pygame.Surface(rect.size, pygame.SRCALPHA)
+        pygame.draw.rect(shade, (0, 0, 0, dim), shade.get_rect(), border_radius=8)
+        screen.blit(shade, rect)
 
 
 def draw_game_over_overlay():
@@ -3570,14 +3779,18 @@ def draw_sidebar():
     # The hand sits directly on the game background - no tray panel behind it,
     # and the cards are large enough to overlap the board's lower edge.
 
-    # Discard (left) and End Turn (right) buttons, with pile/deck counts below.
-    n_marked = sum(1 for c in game.hand[game.turn] if c in game.discard_marks)
+    # Discard (left) and End Turn (right) buttons, with status counts below.
+    discards_left = game.MAX_DISCARDS - game.discards_used[game.turn]
     buttons = get_action_buttons()
     mouse_pos = pygame.mouse.get_pos()
+    dragging_to_discard = (
+        dragging_card is not None
+        and buttons["discard"].collidepoint(mouse_pos)
+    )
     meta = {
-        "discard": (f"DISCARD {n_marked}" if n_marked else "DISCARD",
-                    (235, 45, 45) if n_marked else (200, 70, 70),
-                    f"Pile {len(game.discard[game.turn])}"),
+        "discard": ("DISCARD",
+                    (235, 45, 45) if dragging_to_discard else (200, 70, 70),
+                    f"{discards_left} left"),
         "end_turn": ("END TURN", (90, 200, 120), f"Deck {len(game.deck[game.turn])}"),
     }
     for key, brect in buttons.items():
@@ -3594,23 +3807,39 @@ def draw_sidebar():
 
     card_rects = get_card_rects()
     mouse_pos = pygame.mouse.get_pos()
-    hovered = None
     flight = cards_in_flight()  # cards still flying in from the deck stay hidden
 
+    # The card under the cursor (topmost wins, since later cards draw on top).
+    hovered = None
+    if dragging_card is None:
+        for card_name, rect in card_rects.items():
+            if card_name not in flight and rect.collidepoint(mouse_pos):
+                hovered = card_name
+
+    # Ease each card's hover amount toward its target so the lift and glow
+    # animate in and out instead of snapping. Drop stale entries.
+    for card_name in [c for c in _card_hover_anim if c not in card_rects]:
+        del _card_hover_anim[card_name]
+    for card_name in card_rects:
+        target = 1.0 if card_name == hovered else 0.0
+        cur = _card_hover_anim.get(card_name, 0.0)
+        cur += (target - cur) * 0.25
+        _card_hover_anim[card_name] = target if abs(cur - target) < 0.01 else cur
+
+    # Resting cards first; the hovered card is redrawn lifted on top.
     for card_name, rect in card_rects.items():
-        if dragging_card == card_name or card_name in flight:
+        if dragging_card == card_name or card_name in flight or card_name == hovered:
             continue
-
-        draw_single_card(rect, game.turn, card_name)
-
-        if rect.collidepoint(mouse_pos):
-            hovered = card_name
+        h = _card_hover_anim.get(card_name, 0.0)
+        draw_single_card(rect, game.turn, card_name, hover=h, lift=round(CARD_HOVER_LIFT * h))
 
     # Redraw the hovered card on top (cards can overlap), outline it, and float
     # a large readable preview above it.
     if hovered is not None and dragging_card is None:
-        draw_single_card(card_rects[hovered], game.turn, hovered)
-        outline = card_rects[hovered].move(0, get_card_bob(hovered)).inflate(6, 6)
+        h = _card_hover_anim.get(hovered, 1.0)
+        lift = round(CARD_HOVER_LIFT * h)
+        draw_single_card(card_rects[hovered], game.turn, hovered, hover=h, lift=lift)
+        outline = card_rects[hovered].move(0, get_card_bob(hovered) - lift).inflate(6, 6)
         pygame.draw.rect(screen, (255, 220, 110), outline, 3, border_radius=10)
         draw_card_preview(game.turn, hovered, card_rects[hovered])
 
@@ -3741,8 +3970,10 @@ def draw_info_panel():
         card_text = "Queentum active: click any legal teleport destination."
     elif game.active_card == "inzone":
         card_text = "InZone active: keep capturing with the selected piece."
+    elif game.active_card == "gambit":
+        card_text = "Gambit active: click your pieces to sacrifice them, or click elsewhere to finish."
     else:
-        card_text = "Play cards (afford-gated), then move a piece or END TURN. Right-click cards to mark, DISCARD to redraw."
+        card_text = "Drag cards onto your pieces to play them, or onto DISCARD to redraw. Move a piece, then press END TURN."
 
     bar = pygame.Rect(0, INFO_Y, SCREEN_WIDTH, INFO_HEIGHT)
     pygame.draw.rect(screen, PANEL_BG, bar)
@@ -4321,83 +4552,29 @@ while running:
             mouse_pos = event.pos
             card_rects = get_card_rects()
 
-            # Right-click toggles a card's discard mark.
-            if event.button == 3:
-                for card_name, rect in card_rects.items():
-                    if rect.collidepoint(mouse_pos):
-                        if card_name in game.discard_marks:
-                            game.discard_marks.discard(card_name)
-                        else:
-                            game.discard_marks.add(card_name)
-                        break
-                continue
-
-            # End Turn / Discard buttons.
+            # End Turn / Discard buttons. Discarding is done by dragging a card
+            # onto the Discard button, so a bare click just explains how.
             buttons = get_action_buttons()
             if buttons["end_turn"].collidepoint(mouse_pos):
                 game.end_turn()
                 continue
             if buttons["discard"].collidepoint(mouse_pos):
-                if any(c in game.discard_marks for c in game.hand[game.turn]):
-                    game.end_turn(discard_marked=True)
+                left = game.MAX_DISCARDS - game.discards_used[game.turn]
+                if left > 0:
+                    game.status_message = f"Drag a card onto Discard to throw it away ({left} left)."
                 else:
-                    game.status_message = "Right-click cards to mark them, then Discard."
+                    game.status_message = f"No discards left (limit {game.MAX_DISCARDS})."
                 continue
 
+            # Pick up a card. Every card can be dragged: onto one of your pieces
+            # or the board to play it, or onto the Discard button to discard it.
             clicked_card = None
-
             for card_name, rect in card_rects.items():
                 if rect.collidepoint(mouse_pos):
                     clicked_card = card_name
 
             if clicked_card is not None:
-                if game.active_card is not None:
-                    game.status_message = "Finish the active card move first."
-
-                elif clicked_card == "switchero":
-                    game.activate_switchero()
-
-                elif clicked_card == "prophecy":
-                    game.activate_prophecy()
-
-                elif clicked_card == "capitalism":
-                    game.activate_capitalism()
-
-                elif clicked_card == "plague":
-                    game.activate_plague()
-
-                elif clicked_card == "solo":
-                    game.activate_solo()
-
-                elif clicked_card == "absoluteprotection":
-                    game.activate_absoluteprotection()
-
-                elif clicked_card == "timetraveler":
-                    game.activate_timetraveler()
-
-                elif clicked_card == "extrablood":
-                    game.activate_extrablood()
-
-                elif clicked_card == "chrisma":
-                    game.activate_chrisma()
-
-                elif clicked_card == "nope":
-                    game.activate_nope()
-
-                elif clicked_card == "communism":
-                    game.activate_communism()
-
-                elif clicked_card == "propaganda":
-                    game.activate_propaganda()
-
-                elif clicked_card == "ifeelsafe":
-                    game.activate_ifeelsafe()
-
-                elif clicked_card == "iguess":
-                    game.activate_iguess()
-
-                else:
-                    dragging_card = clicked_card
+                dragging_card = clicked_card
 
             else:
                 square = get_square_from_mouse(mouse_pos)
@@ -4417,43 +4594,25 @@ while running:
 
         elif event.type == pygame.MOUSEBUTTONUP:
             if dragging_card is not None:
-                square = get_square_from_mouse(event.pos)
+                buttons = get_action_buttons()
 
-                if square is not None:
-                    row, col = square
+                if game.active_card is not None:
+                    game.status_message = "Finish the active card move first."
 
-                    if dragging_card == "pawntastic":
-                        game.activate_pawntastic_on_square(row, col)
+                elif buttons["discard"].collidepoint(event.pos):
+                    # Dropped on the Discard button: throw the card away.
+                    game.discard_card(dragging_card)
 
-                    elif dragging_card == "bishock":
-                        game.activate_bishock_on_square(row, col)
+                elif dragging_card in INSTANT_CARDS:
+                    # Instant cards take effect wherever they are released.
+                    getattr(game, f"activate_{dragging_card}")()
 
-                    elif dragging_card == "rookdemon":
-                        game.activate_rookdemon_on_square(row, col)
-
-                    elif dragging_card == "windknight":
-                        game.activate_windknight_on_square(row, col)
-
-                    elif dragging_card == "queentum":
-                        game.activate_queentum_on_square(row, col)
-
-                    elif dragging_card == "longlivetheking":
-                        game.activate_longlivetheking_on_square(row, col)
-
-                    elif dragging_card == "armageddon":
-                        game.activate_armageddon_on_square(row, col)
-
-                    elif dragging_card == "thedramatic":
-                        game.activate_thedramatic_on_square(row, col)
-
-                    elif dragging_card == "inzone":
-                        game.activate_inzone_on_square(row, col)
-
-                    elif dragging_card == "gambit":
-                        game.activate_gambit_on_square(row, col)
-
-                else:
-                    game.status_message = "Drop the card on a valid piece."
+                elif dragging_card in TARGET_CARDS:
+                    square = get_square_from_mouse(event.pos)
+                    if square is not None:
+                        getattr(game, f"activate_{dragging_card}_on_square")(*square)
+                    else:
+                        game.status_message = "Drop the card on a valid piece, or on Discard."
 
                 dragging_card = None
 
