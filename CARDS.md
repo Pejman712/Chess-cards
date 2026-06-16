@@ -31,5 +31,6 @@ Bought with Ether and played directly — click instant cards, drag targeted one
 | **Armageddon** | 30 | A meteor flattens a 3×3 area (kings survive), leaves fire behind, and pays you the destroyed pieces' value. |
 | **InZone** | 30 | One piece chains capture after capture in a single turn — but dies when the streak ends. |
 | **The Prophecy** | 40 | Every one of your pawns is promoted to a queen. |
+| **Gravity Storm** | 30 | Pick a point: every piece is pulled toward it and stops at a piece or wall, forming a ring around the point. The point stays empty (any piece on it is crushed) and cannot be a king. |
 | **Plague** | 60 | At the start of each of your turns, one random enemy piece (never the king) dies. |
 | **Capitalism** | 100 | Money wins: pay 100 Ether and take the game instantly. |

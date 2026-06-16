@@ -407,6 +407,7 @@ CARD_NAMES = [
     "propaganda",
     "ifeelsafe",
     "iguess",
+    "gravitystorm",
 ]
 
 PIECE_POWER_CARDS = [
@@ -437,6 +438,7 @@ GENERAL_CARDS = [
     "propaganda",
     "ifeelsafe",
     "iguess",
+    "gravitystorm",
 ]
 
 # Tray order: piece-power cards first, then game cards.
@@ -464,6 +466,7 @@ CARD_TARGET_TYPE = {
 TARGET_CARDS = {
     "pawntastic", "bishock", "rookdemon", "windknight", "queentum",
     "longlivetheking", "armageddon", "thedramatic", "inzone", "gambit",
+    "gravitystorm",
 }
 INSTANT_CARDS = {
     "switchero", "prophecy", "capitalism", "plague", "solo", "absoluteprotection",
@@ -549,6 +552,7 @@ CARD_COSTS = {
     "propaganda": 30,
     "ifeelsafe": 15,
     "iguess": 40,
+    "gravitystorm": 30,
 }
 
 ABILITY_CARDS = {
@@ -579,6 +583,7 @@ GAME_CARDS = {
     "propaganda",
     "ifeelsafe",
     "iguess",
+    "gravitystorm",
 }
 
 card_images = {
@@ -616,6 +621,7 @@ CARD_INFO = {
     "propaganda": ("Propaganda", (120, 60, 130), "Each of your turns: 50% to convert an enemy piece."),
     "ifeelsafe": ("I Feel Safe", (40, 110, 120), "Passive: end of turn, +3 Ether per piece by your king."),
     "iguess": ("I Guess", (90, 90, 100), "Permanently take 2 extra moves each turn."),
+    "gravitystorm": ("Gravity Storm", (50, 40, 80), "Every piece falls toward the chosen point until it hits a piece or wall."),
 }
 
 
@@ -999,6 +1005,20 @@ def draw_animations():
                 grown.set_alpha(int(255 * t))
                 screen.blit(grown, grown.get_rect(midbottom=(tcx, ty + SQUARE_H - SQUARE_H // 12)))
                 rings(tcx, ty + SQUARE_H // 2, int(SQUARE_W * 0.55 * (1 - t)), int(220 * t))
+
+        elif anim["kind"] == "slide":
+            # A piece gliding from its old square to its new one (Gravity Storm).
+            ex = anim["extra"]
+            fr, fc = ex["from"]
+            tr, tc = ex["to"]
+            fx, fy = board_to_screen(fr, fc)
+            tx, ty = board_to_screen(tr, tc)
+            ease = 1 - (1 - progress) ** 2  # ease-out toward the centre
+            cx = fx + (tx - fx) * ease
+            cy = fy + (ty - fy) * ease
+            surf = get_piece_surface(ex["piece"])
+            rect = surf.get_rect(midbottom=(cx + SQUARE_W // 2, cy + SQUARE_H - SQUARE_H // 12))
+            screen.blit(surf, rect)
 
         elif anim["kind"] == "card_fly":
             ex = anim["extra"]
@@ -2140,6 +2160,98 @@ class GameState:
             f"{{player}} played Armageddon. Destroyed {destroyed_count} piece(s) and created fire."
         )
 
+    def activate_gravitystorm_on_square(self, row, col):
+        if self.game_over:
+            return
+
+        target = (row, col)
+        core_piece = self.board[row][col]
+
+        # The gravity core may not be aimed at a king - the king is never
+        # crushed, so the card simply cannot be played there.
+        if core_piece is not None and core_piece.lower() == "k":
+            self.status_message = "Gravity Storm cannot be aimed at a king."
+            return
+
+        if not self.spend_card("gravitystorm"):
+            return
+
+        crushed = 0
+        # The chosen point becomes an empty, impassable core. Any piece sitting
+        # on it is crushed as the core forms, and nothing else ever settles
+        # there - every other piece is packed into a tight circle around it.
+        if core_piece is not None:
+            self.board[row][col] = None
+            self.rookdemon_rooks.pop((row, col), None)
+            self.dramatic_pieces.discard((row, col))
+            if self.windknight_square == (row, col):
+                self.windknight_square = None
+                self.windknight_moves_remaining = 0
+            if self.inzone_square == (row, col):
+                self.inzone_square = None
+            add_animation("burst", squares=[(row, col)], text="CRUSH", color=(150, 120, 230), frames=30)
+            crushed = 1
+
+        # Collect every remaining piece, the ones nearest the core first.
+        movers = []
+        for r in range(ROWS):
+            for c in range(COLS):
+                piece = self.board[r][c]
+                if piece is not None:
+                    movers.append((r, c, piece))
+        movers.sort(key=lambda m: (m[0] - row) ** 2 + (m[1] - col) ** 2)
+
+        # Real gravity: each piece, closest first, slides toward the point one
+        # king-step at a time (diagonally when it can, straight when aligned)
+        # and stops the instant the next square is the empty core, the wall, or
+        # a piece that already settled. The piece in front stops nearest the
+        # point and whatever is behind it stacks up outside - so the pieces that
+        # START closest (the pawns) end up innermost and the back rank piles up
+        # around them. Each piece only travels along its own line toward the
+        # point, so it always keeps the side it came from.
+        moved = 0
+        for fr, fc, piece in movers:
+            cr, cc = fr, fc
+            while True:
+                dr = (row > cr) - (row < cr)
+                dc = (col > cc) - (col < cc)
+                nr, nc = cr + dr, cc + dc
+                if (nr, nc) == target:
+                    break
+                if not self.in_bounds(nr, nc) or self.board[nr][nc] is not None:
+                    break
+                cr, cc = nr, nc
+
+            if (cr, cc) == (fr, fc):
+                continue
+
+            # Move the piece and carry its per-square state along with it.
+            self.board[cr][cc] = piece
+            self.board[fr][fc] = None
+            if (fr, fc) in self.rookdemon_rooks:
+                self.rookdemon_rooks[(cr, cc)] = self.rookdemon_rooks.pop((fr, fc))
+            if (fr, fc) in self.dramatic_pieces:
+                self.dramatic_pieces.discard((fr, fc))
+                self.dramatic_pieces.add((cr, cc))
+            if self.windknight_square == (fr, fc):
+                self.windknight_square = (cr, cc)
+            if self.inzone_square == (fr, fc):
+                self.inzone_square = (cr, cc)
+
+            # A gentle slide from where the piece started to its new spot.
+            add_animation("slide", frames=48, extra={
+                "piece": piece,
+                "from": (fr, fc),
+                "to": (cr, cc),
+            })
+            moved += 1
+
+        add_animation("burst", squares=[target], text="GRAVITY", color=(150, 120, 230), frames=42)
+        note = f"{moved} piece(s) pulled inward"
+        if crushed:
+            note += " and 1 crushed on the core"
+        self.finish_card(f"{{player}} unleashed Gravity Storm. {note}.")
+
     def activate_thedramatic_on_square(self, row, col):
         if self.game_over:
             return
@@ -2385,8 +2497,9 @@ class GameState:
             return
 
         opp = self.enemy_color(self.turn)
+        in_check = self.is_in_check(self.turn)
 
-        if self.card_undo.get(opp) is None and not self.is_in_check(self.turn):
+        if self.card_undo.get(opp) is None and not in_check:
             self.status_message = "Nope has nothing to cancel."
             return
 
@@ -2395,15 +2508,10 @@ class GameState:
 
         notes = []
 
-        # Cancel the opponent's last card by reverting its board/power effects
-        # (the current turn and Ether totals are left as they are now).
-        if self.card_undo.get(opp) is not None:
-            self.restore_snapshot(self.card_undo[opp], keep_turn=True, keep_ether=True)
-            self.card_undo[opp] = None
-            notes.append("cancelled the opponent's last card")
-
-        # If still in check after that, the checking piece is destroyed.
-        if self.is_in_check(self.turn):
+        if in_check:
+            # In check, killing the piece giving check takes priority: it
+            # removes the threat directly, whereas reverting the opponent's
+            # card might not clear the check (it can come from a normal move).
             killed = 0
             for r, c in self.find_checking_pieces(self.turn):
                 piece = self.board[r][c]
@@ -2415,6 +2523,14 @@ class GameState:
                     killed += 1
             if killed:
                 notes.append("destroyed the checking piece")
+        elif self.card_undo.get(opp) is not None:
+            # Cancel the opponent's last card (it may have been played a turn or
+            # two ago) by reverting to the state just before it. This last card
+            # may itself be a Nope, so Nope can cancel a Nope. The current turn
+            # and Ether totals are left as they are now.
+            self.restore_snapshot(self.card_undo[opp], keep_turn=True, keep_ether=True)
+            self.card_undo[opp] = None
+            notes.append("cancelled the opponent's last card")
 
         summary = " and ".join(notes) if notes else "fizzled"
         self.finish_card(f"{{player}} played Nope: {summary}.")
@@ -2851,9 +2967,9 @@ class GameState:
 
         if not test_mode:
             self.save_history()
-            # A normal move makes this player's last action a move, not a card,
-            # so the opponent's Nope can no longer cancel a card here.
-            self.card_undo[self.piece_color(piece)] = None
+            # Note: a normal move does NOT clear card_undo. Nope cancels the
+            # opponent's *last card*, which stays cancellable across the moves
+            # and turns played after it, until the opponent plays another card.
             self.log_event(self.piece_color(piece), "move",
                            self.move_notation(piece, original_from_square,
                                               original_to_square, captured_piece))
@@ -3488,6 +3604,8 @@ def draw_pieces():
     }
     # The teleporting queen is drawn by the teleport animation until it lands.
     animated_squares |= {anim["extra"]["to"] for anim in animations if anim["kind"] == "teleport"}
+    # Gravity Storm pieces are drawn by their slide animation until they arrive.
+    animated_squares |= {anim["extra"]["to"] for anim in animations if anim["kind"] == "slide"}
 
     occupied = []
     for row in range(ROWS):
