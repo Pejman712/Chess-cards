@@ -695,7 +695,7 @@ def cards_in_flight():
 def animate_initial_hand():
     # Fly the already-dealt starting hand in from the deck, one card per slot.
     rects = get_card_rects()
-    for i, card in enumerate(game.hand[game.turn]):
+    for i, card in enumerate(game.hand[view_color()]):
         r = rects.get(card)
         target = r.center if r is not None else _hand_center_pos()
         spawn_draw_fly(target, i, card)
@@ -751,7 +751,15 @@ def init_floating_cards():
             "vy": random.uniform(-22, 22),
             "angle": random.uniform(0, 360),
             "spin": random.uniform(-18, 18),
+            "_ra": None,   # angle of the cached rotated surface
+            "_rs": None,   # cached rotated surface
         })
+
+
+# Snap rotation to a fine step and cache the rotated frame. The step is small
+# enough that the spin looks continuous, but it still avoids a re-rotate on
+# frames where the angle barely moved (and for nearly-still cards).
+FLOAT_ANGLE_STEP = 0.5
 
 
 def draw_floating_cards():
@@ -759,7 +767,10 @@ def draw_floating_cards():
         init_floating_cards()
 
     now = pygame.time.get_ticks()
-    dt = min(0.05, (now - _last_float_ticks[0]) / 1000.0) if _last_float_ticks[0] else 0.016
+    if _last_float_ticks[0]:
+        dt = max(0.0, min(0.05, (now - _last_float_ticks[0]) / 1000.0))
+    else:
+        dt = 1 / 60
     _last_float_ticks[0] = now
 
     margin = int(SCREEN_HEIGHT * 0.18)
@@ -778,8 +789,14 @@ def draw_floating_cards():
         elif card["y"] > SCREEN_HEIGHT + margin:
             card["y"] = -margin
 
-        rotated = pygame.transform.rotate(card["base"], card["angle"])
-        screen.blit(rotated, rotated.get_rect(center=(int(card["x"]), int(card["y"]))))
+        # Rotate with antialiasing (rotozoom), but only when the snapped angle
+        # actually changes - the cached frame is reused on the frames between.
+        bucket = round(card["angle"] / FLOAT_ANGLE_STEP) * FLOAT_ANGLE_STEP
+        if card["_rs"] is None or bucket != card["_ra"]:
+            card["_ra"] = bucket
+            card["_rs"] = pygame.transform.rotozoom(card["base"], bucket, 1.0)
+        rotated = card["_rs"]
+        screen.blit(rotated, rotated.get_rect(center=(round(card["x"]), round(card["y"]))))
 
 
 BG_DIM = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
@@ -3345,7 +3362,24 @@ dragging_lift_ticks = 0  # when the current drag started, for the lift ease
 dragging_lift_from = (0, 0)  # screen point the piece was lifted from
 
 
+def view_color():
+    # Whose hand / ether / deck the local player should SEE in the tray. In
+    # hot-seat this is the side to move; vs Computer the human is always White;
+    # online it is the local player's own colour (so you never see the
+    # opponent's hand, and your tray stays put when it's their turn).
+    if game_mode == "pvc":
+        return WHITE
+    if game_mode == "online" and net_local_color is not None:
+        return net_local_color
+    return game.turn
+
+
 def is_board_flipped():
+    # Keep the local player's own side at the bottom of the screen.
+    if game_mode == "pvc":
+        return False  # human always plays White
+    if game_mode == "online" and net_local_color is not None:
+        return net_local_color == BLACK
     return game.turn == BLACK
 
 
@@ -3366,7 +3400,7 @@ def get_card_rects():
     # The current player's hand, fanned in a shallow arc and centered between
     # the side buttons. Cards overlap only if the hand is unusually large.
     rects = {}
-    hand = game.hand[game.turn]
+    hand = game.hand[view_color()]
     n = len(hand)
     if n == 0:
         return rects
@@ -3758,7 +3792,7 @@ def draw_single_card(rect, owner, card_name, hover=1.0, lift=0):
     # Cards in hand are always playable (no "used" state in the deck system).
     used = False
     display_name, accent, _ = CARD_INFO.get(card_name, (card_name, (70, 70, 70), ""))
-    affordable = game.ether[game.turn] >= CARD_COSTS.get(card_name, 0)
+    affordable = game.ether[view_color()] >= CARD_COSTS.get(card_name, 0)
 
     rect = rect.move(0, get_card_bob(card_name) - lift)
 
@@ -3917,7 +3951,7 @@ def draw_sidebar():
     # and the cards are large enough to overlap the board's lower edge.
 
     # Discard (left) and End Turn (right) buttons, with status counts below.
-    discards_left = game.MAX_DISCARDS - game.discards_used[game.turn]
+    discards_left = game.MAX_DISCARDS - game.discards_used[view_color()]
     buttons = get_action_buttons()
     mouse_pos = pygame.mouse.get_pos()
     dragging_to_discard = (
@@ -3928,7 +3962,7 @@ def draw_sidebar():
         "discard": ("DISCARD",
                     (235, 45, 45) if dragging_to_discard else (200, 70, 70),
                     f"{discards_left} left"),
-        "end_turn": ("END TURN", (90, 200, 120), f"Deck {len(game.deck[game.turn])}"),
+        "end_turn": ("END TURN", (90, 200, 120), f"Deck {len(game.deck[view_color()])}"),
     }
     for key, brect in buttons.items():
         label, color, sub = meta[key]
@@ -3968,17 +4002,17 @@ def draw_sidebar():
         if dragging_card == card_name or card_name in flight or card_name == hovered:
             continue
         h = _card_hover_anim.get(card_name, 0.0)
-        draw_single_card(rect, game.turn, card_name, hover=h, lift=round(CARD_HOVER_LIFT * h))
+        draw_single_card(rect, view_color(), card_name, hover=h, lift=round(CARD_HOVER_LIFT * h))
 
     # Redraw the hovered card on top (cards can overlap), outline it, and float
     # a large readable preview above it.
     if hovered is not None and dragging_card is None:
         h = _card_hover_anim.get(hovered, 1.0)
         lift = round(CARD_HOVER_LIFT * h)
-        draw_single_card(card_rects[hovered], game.turn, hovered, hover=h, lift=lift)
+        draw_single_card(card_rects[hovered], view_color(), hovered, hover=h, lift=lift)
         outline = card_rects[hovered].move(0, get_card_bob(hovered) - lift).inflate(6, 6)
         pygame.draw.rect(screen, (255, 220, 110), outline, 3, border_radius=10)
-        draw_card_preview(game.turn, hovered, card_rects[hovered])
+        draw_card_preview(view_color(), hovered, card_rects[hovered])
 
 
 def draw_dragging_card():
@@ -3990,7 +4024,7 @@ def draw_dragging_card():
     rect = pygame.Rect(0, 0, CARD_WIDTH, CARD_HEIGHT)
     rect.center = (mouse_x, mouse_y)
 
-    draw_single_card(rect, game.turn, dragging_card)
+    draw_single_card(rect, view_color(), dragging_card)
 
 
 def draw_dragging_piece():
@@ -4192,10 +4226,19 @@ MENU_GOLD = (240, 188, 40)        # CHESSBYTE "BYTE" + selected button
 MENU_GOLD_DARK = (40, 30, 6)      # text on top of the gold button
 MENU_RED = (224, 104, 92)         # EXIT label
 
-app_state = "menu"  # "menu" | "modeselect" | "playing" | "catalog" | "settings"
+app_state = "menu"  # "menu" | "modeselect" | "lobby" | "playing" | "catalog" | "settings"
 menu_selected = 0
 modeselect_selected = 0
-game_mode = "pvp"  # "pvp" (hot-seat) | "pvc" (computer plays Black)
+game_mode = "pvp"  # "pvp" (hot-seat) | "pvc" (computer plays Black) | "online" (LAN)
+
+# LAN play (host-authoritative full-state sync). All None until a game is hosted
+# or joined; see the "Online play" block near the main loop.
+net = None             # netplay.NetLink while online, else None
+net_local_color = None  # WHITE for the host, BLACK for the joiner
+net_join_text = ""      # host address the joiner types (blank = auto-find)
+_net_prev_turn = None   # for detecting "I just ended my turn" -> push state
+_net_prev_over = False
+_online_dealt = False   # host: has it dealt + sent the opening position yet
 
 # Smooth fade-to-black transition between screens. progress runs 0 -> 1; the
 # screen switches at the half-way point (fully black), so it fades out then in.
@@ -4654,16 +4697,25 @@ MODE_ITEMS = [
      "sub": "You play White vs Stockfish (regular chess). You can still play cards."},
     {"label": "PLAYER VS PLAYER", "mode": "pvp",
      "sub": "Two players, hot-seat on the same screen."},
+    {"label": "HOST GAME (LAN)", "mode": "host",
+     "sub": "You play White. Your friend on the same Wi-Fi joins you."},
+    {"label": "JOIN GAME (LAN)", "mode": "join",
+     "sub": "You play Black. Finds a hosted game on your network automatically."},
 ]
 
 
 def get_modeselect_rects():
-    bw = int(min(760, SCREEN_WIDTH * 0.62))
-    bh = max(64, int(SCREEN_HEIGHT * 0.12))
-    gap = int(bh * 0.55)
-    top = int(SCREEN_HEIGHT * 0.34)
+    # Lay the buttons out to always fit on screen, however many modes there are:
+    # the area between the title and the back hint is split into equal slots and
+    # each button (plus its little description) sits in one slot.
+    n = len(MODE_ITEMS)
+    bw = int(min(720, SCREEN_WIDTH * 0.58))
+    top = int(SCREEN_HEIGHT * 0.28)
+    bottom = int(SCREEN_HEIGHT * 0.88)
+    slot = (bottom - top) // max(1, n)
+    bh = min(int(SCREEN_HEIGHT * 0.095), int(slot * 0.58))
     x = (SCREEN_WIDTH - bw) // 2
-    return [pygame.Rect(x, top + i * (bh + gap), bw, bh) for i in range(len(MODE_ITEMS))]
+    return [pygame.Rect(x, top + i * slot, bw, bh) for i in range(n)]
 
 
 def draw_modeselect_screen():
@@ -4679,16 +4731,37 @@ def draw_modeselect_screen():
         tcol = MENU_GOLD_DARK if selected else (228, 228, 238)
         label = menu_option_font.render(item["label"], True, tcol)
         screen.blit(label, label.get_rect(center=rect.center))
-        sub = tiny_font.render(item["sub"], True, MENU_MUTED)
-        screen.blit(sub, sub.get_rect(midtop=(rect.centerx, rect.bottom + 8)))
+        sub = tiny_font.render(clip_text(tiny_font, item["sub"], rect.width), True, MENU_MUTED)
+        screen.blit(sub, sub.get_rect(midtop=(rect.centerx, rect.bottom + 6)))
 
     draw_back_hint()
 
 
 def start_mode(mode):
-    global game_mode
-    game_mode = mode
+    global game_mode, net, net_local_color, _online_dealt
     ai_reset()
+
+    if mode in ("host", "join"):
+        global net_join_text
+        _online_dealt = False
+        game_mode = "online"
+        if mode == "host":
+            import netplay
+            net = netplay.NetLink()
+            net_local_color = WHITE
+            net.host()
+        else:
+            # The joiner enters the host's address (or leaves it blank to
+            # auto-find) in the lobby, so the link starts there, not here.
+            net = None
+            net_local_color = BLACK
+            net_join_text = ""
+        request_transition("lobby")
+        return
+
+    game_mode = mode
+    net = None
+    net_local_color = None
     if mode == "pvc":
         ensure_engine()
     request_transition("playing", on_switch=start_new_game)
@@ -4920,6 +4993,187 @@ def _close_engine():
 
 
 # -----------------------------
+# Online play (LAN, host-authoritative full-state sync)
+# -----------------------------
+import pickle
+
+
+def net_serialize_state():
+    # Only plain data lives in GameState.__dict__ (lists, dicts, sets, ints,
+    # strings), so this pickles and replays cleanly on the other machine.
+    return pickle.dumps({"type": "state", "dict": game.__dict__})
+
+
+def net_apply_state(d):
+    global dragging_card, dragging_piece
+    game.__dict__.update(d)
+    animations.clear()          # the peer's animations don't travel; drop stale ones
+    dragging_card = None
+    dragging_piece = None
+
+
+def net_reset_sync():
+    global _net_prev_turn, _net_prev_over
+    _net_prev_turn = game.turn
+    _net_prev_over = game.game_over
+
+
+def net_leave():
+    global net, net_local_color, game_mode, net_join_text
+    if net is not None:
+        net.close()
+    net = None
+    net_local_color = None
+    net_join_text = ""
+    game_mode = "pvp"
+
+
+def net_lobby_update():
+    # Runs each frame on the lobby screen: completes the handshake and, once both
+    # sides are connected, the host deals + sends the opening position and both
+    # transition into the game.
+    global _online_dealt
+    if net is None or net.error is not None:
+        return
+    if net.role == "host":
+        if net.connected and not _online_dealt:
+            start_new_game()
+            net_reset_sync()
+            net.send(net_serialize_state())
+            _online_dealt = True
+            request_transition("playing")
+    else:  # client waits for the host's opening state
+        if net.connected:
+            payload = net.poll()
+            if payload is not None:
+                try:
+                    msg = pickle.loads(payload)
+                except Exception:
+                    msg = None
+                if msg and msg.get("type") == "state":
+                    net_apply_state(msg["dict"])
+                    net_reset_sync()
+                    request_transition("playing")
+
+
+def net_receive():
+    # Drain incoming states at the start of a playing frame so input this frame
+    # sees the latest position.
+    global _net_prev_turn, _net_prev_over
+    if game_mode != "online" or net is None:
+        return
+    payload = net.poll()
+    while payload is not None:
+        try:
+            msg = pickle.loads(payload)
+        except Exception:
+            msg = None
+        if msg and msg.get("type") == "state":
+            net_apply_state(msg["dict"])
+            _net_prev_turn = game.turn
+            _net_prev_over = game.game_over
+        payload = net.poll()
+
+
+def net_push_if_handover():
+    # After local input: if I just ended my turn (or the game), send the state.
+    global _net_prev_turn, _net_prev_over
+    if game_mode != "online" or net is None or not net.connected:
+        return
+    ended_turn = (_net_prev_turn == net_local_color and game.turn != net_local_color)
+    ended_game = (game.game_over and not _net_prev_over)
+    if ended_turn or ended_game:
+        net.send(net_serialize_state())
+    _net_prev_turn = game.turn
+    _net_prev_over = game.game_over
+
+
+def net_start_join():
+    global net
+    import netplay
+    net = netplay.NetLink()
+    net.join(host_ip=(net_join_text.strip() or None))
+
+
+def draw_lobby_screen():
+    draw_menu_background()
+    screen.blit(menu_title_font.render("LAN GAME", True, MENU_CYAN),
+                draw_glow_title("LAN GAME", MENU_CYAN, (SCREEN_WIDTH // 2, int(SCREEN_HEIGHT * 0.18))))
+
+    # A soft panel behind the text so the address / status reads against the
+    # busy galaxy background.
+    panel_rect = pygame.Rect(0, 0, int(SCREEN_WIDTH * 0.52), int(SCREEN_HEIGHT * 0.46))
+    panel_rect.center = (SCREEN_WIDTH // 2, int(SCREEN_HEIGHT * 0.55))
+    panel = pygame.Surface(panel_rect.size, pygame.SRCALPHA)
+    pygame.draw.rect(panel, (*MENU_BG1, 210), panel.get_rect(), border_radius=16)
+    screen.blit(panel, panel_rect)
+    pygame.draw.rect(screen, MENU_CYAN, panel_rect, 2, border_radius=16)
+
+    cx = SCREEN_WIDTH // 2
+    y = int(SCREEN_HEIGHT * 0.38)
+
+    def line(text, color, font=menu_font, dy=46):
+        nonlocal y
+        surf = font.render(text, True, color)
+        screen.blit(surf, surf.get_rect(center=(cx, y)))
+        y += dy
+
+    if net_local_color == WHITE:
+        # Host.
+        line("Hosting as WHITE", MENU_GOLD)
+        line(f"Your address:  {net.local_ip}" if net else "Your address: ...",
+             MENU_WHITE, small_font, 38)
+        if net is not None and net.connected:
+            line("Friend connected - starting...", MENU_GREEN)
+        else:
+            line("Waiting for your friend to join...", MENU_CYAN)
+            line("They choose JOIN GAME and type the address above.", MENU_MUTED, small_font)
+    else:
+        # Joiner.
+        line("Joining as BLACK", MENU_PINK)
+        if net is None or net.error is not None:
+            if net is not None and net.error is not None:
+                line(f"Couldn't connect: {net.error}", MENU_RED, small_font, 38)
+            line("Type the host's address (shown on their screen):", MENU_WHITE, small_font, 40)
+            box = pygame.Rect(0, 0, int(SCREEN_WIDTH * 0.32), 52)
+            box.center = (cx, y + 6)
+            pygame.draw.rect(screen, MENU_BG2, box, border_radius=8)
+            pygame.draw.rect(screen, MENU_CYAN, box, 2, border_radius=8)
+            caret = "_" if (pygame.time.get_ticks() // 500) % 2 == 0 else " "
+            txt = menu_font.render((net_join_text or "") + caret, True, MENU_WHITE)
+            screen.blit(txt, txt.get_rect(midleft=(box.left + 12, box.centery)))
+            y = box.bottom + 16
+            line("ENTER to connect   (blank = auto-find on this Wi-Fi)", MENU_MUTED, small_font)
+        elif net.connected:
+            line("Connected - waiting for the first move...", MENU_GREEN)
+        else:
+            target = net_join_text.strip() or "the network"
+            line(f"Connecting to {target}...", MENU_CYAN)
+
+    draw_back_hint()
+
+
+def handle_lobby_events(events):
+    global running, net_join_text
+    joiner_input = (net_local_color == BLACK and (net is None or net.error is not None))
+    for event in events:
+        if event.type == pygame.QUIT:
+            net_leave()
+            running = False
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                net_leave()
+                request_transition("menu")
+            elif joiner_input:
+                if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                    net_start_join()
+                elif event.key == pygame.K_BACKSPACE:
+                    net_join_text = net_join_text[:-1]
+                elif event.unicode and event.unicode in "0123456789." and len(net_join_text) < 21:
+                    net_join_text += event.unicode
+
+
+# -----------------------------
 # Main loop
 # -----------------------------
 start_music()
@@ -4942,15 +5196,23 @@ while running:
             handle_menu_events(events)
         elif app_state == "modeselect":
             handle_modeselect_events(events)
+        elif app_state == "lobby":
+            handle_lobby_events(events)
         elif app_state == "catalog":
             handle_catalog_events(events)
         elif app_state == "settings":
             handle_settings_events(events)
 
+        # The lobby advances the LAN handshake every frame (even mid-fade).
+        if app_state == "lobby":
+            net_lobby_update()
+
         if app_state == "menu":
             draw_start_screen()
         elif app_state == "modeselect":
             draw_modeselect_screen()
+        elif app_state == "lobby":
+            draw_lobby_screen()
         elif app_state == "catalog":
             draw_catalog_screen()
         elif app_state == "settings":
@@ -4963,9 +5225,17 @@ while running:
         clock.tick(60)
         continue
 
-    # While the computer is to move (PvC, Black), ignore human board/card input
-    # so the player can't act on the AI's turn; ESC still returns to the menu.
+    # Pull in any state the opponent sent before reading input this frame.
+    net_receive()
+
+    # Ignore human board/card input when it isn't this player's turn: the
+    # computer's move in PvC, or the opponent's turn online. ESC still works.
     ai_to_move = (game_mode == "pvc" and game.turn == BLACK and not game.game_over)
+    online_not_my_turn = (
+        game_mode == "online" and net is not None
+        and (not net.connected or game.turn != net_local_color)
+    )
+    human_locked = ai_to_move or online_not_my_turn
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -4974,16 +5244,21 @@ while running:
         if blocked:
             continue  # ignore input mid-fade (events still pumped)
 
-        if ai_to_move:
+        if human_locked:
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                if game_mode == "online":
+                    net_leave()
                 request_transition("menu")
             continue
 
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
+                if game_mode == "online":
+                    net_leave()
                 request_transition("menu")
 
-            elif event.key == pygame.K_r:
+            elif event.key == pygame.K_r and game_mode != "online":
+                # Restart is local-only; disabled online (it would desync).
                 game = GameState()
                 dragging_card = None
                 dragging_piece = None
@@ -5134,6 +5409,13 @@ while running:
 
     # Let the computer take Black's turn in PvC (no-op otherwise).
     ai_update()
+
+    # Online: push the position when I hand over, and bail out if the link drops.
+    net_push_if_handover()
+    if game_mode == "online" and net is not None and net.error is not None and not game.game_over:
+        game.status_message = "Connection lost. Returning to menu."
+        net_leave()
+        request_transition("menu")
 
     draw_background()
     draw_board()
