@@ -5,3 +5,7 @@ engine/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Local settings + saved game
+config.json
+savegame.pkl
