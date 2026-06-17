@@ -3364,11 +3364,11 @@ dragging_lift_from = (0, 0)  # screen point the piece was lifted from
 
 def view_color():
     # Whose hand / ether / deck the local player should SEE in the tray. In
-    # hot-seat this is the side to move; vs Computer the human is always White;
+    # hot-seat this is the side to move; vs Computer the human's chosen colour;
     # online it is the local player's own colour (so you never see the
     # opponent's hand, and your tray stays put when it's their turn).
     if game_mode == "pvc":
-        return WHITE
+        return human_color
     if game_mode == "online" and net_local_color is not None:
         return net_local_color
     return game.turn
@@ -3377,7 +3377,7 @@ def view_color():
 def is_board_flipped():
     # Keep the local player's own side at the bottom of the screen.
     if game_mode == "pvc":
-        return False  # human always plays White
+        return human_color == BLACK
     if game_mode == "online" and net_local_color is not None:
         return net_local_color == BLACK
     return game.turn == BLACK
@@ -3842,6 +3842,41 @@ def draw_single_card(rect, owner, card_name, hover=1.0, lift=0):
         screen.blit(shade, rect)
 
 
+def rematch_available():
+    # A rematch button is offered for local games, and for the online host (the
+    # joiner just receives the host's fresh position automatically).
+    if game.winner_message is None:
+        return False
+    if game_mode == "online":
+        return net is not None and net.connected and net_local_color == WHITE
+    return True
+
+
+def get_rematch_button():
+    box_w = min(BOARD_W - 80, 620)
+    box = pygame.Rect(0, 0, box_w, 110)
+    box.center = (BOARD_X + BOARD_W // 2, BOARD_Y + BOARD_H // 2)
+    btn = pygame.Rect(0, 0, 220, 48)
+    btn.center = (box.centerx, box.bottom + 40)
+    return btn
+
+
+def do_rematch():
+    global _last_saved_turn
+    if game_mode == "online":
+        if net is not None and net.connected and net_local_color == WHITE:
+            start_new_game()
+            net_reset_sync()
+            net.send(net_serialize_state())
+        return
+    delete_save()
+    _last_saved_turn = None
+    if game_mode == "pvc":
+        ai_reset()
+        configure_engine()
+    start_new_game()
+
+
 def draw_game_over_overlay():
     if game.winner_message is None:
         return
@@ -3865,6 +3900,41 @@ def draw_game_over_overlay():
     result = render_clipped(small_font, game.winner_message, TEXT_COLOR, box.width - 40)
     result_rect = result.get_rect(center=(box.centerx, box.y + 74))
     screen.blit(result, result_rect)
+
+    if rematch_available():
+        btn = get_rematch_button()
+        hot = btn.collidepoint(pygame.mouse.get_pos())
+        pygame.draw.rect(screen, (90, 200, 120) if hot else WOOD_FRAME_DARK, btn, border_radius=10)
+        pygame.draw.rect(screen, (120, 230, 150), btn, 3, border_radius=10)
+        lbl = small_font.render("REMATCH", True, (235, 255, 240))
+        screen.blit(lbl, lbl.get_rect(center=btn.center))
+    elif game_mode == "online":
+        wait = small_font.render("Waiting for host to start a rematch...", True, TEXT_COLOR)
+        screen.blit(wait, wait.get_rect(center=(box.centerx, box.bottom + 36)))
+
+
+def draw_wait_banner():
+    # A small status pill when the player can't act: computer thinking, or the
+    # opponent's turn online.
+    msg = None
+    if game.game_over:
+        return
+    if game_mode == "pvc" and game.turn == ai_color():
+        msg = "COMPUTER IS THINKING..."
+    elif game_mode == "online" and net is not None and net.connected and game.turn != net_local_color:
+        msg = "OPPONENT'S TURN..."
+    if msg is None:
+        return
+    surf = small_font.render(msg, True, (245, 235, 180))
+    pad = 14
+    box = surf.get_rect()
+    box.inflate_ip(pad * 2, pad)
+    box.center = (BOARD_X + BOARD_W // 2, BOARD_Y + 26)
+    bg = pygame.Surface(box.size, pygame.SRCALPHA)
+    pygame.draw.rect(bg, (0, 0, 0, 150), bg.get_rect(), border_radius=10)
+    screen.blit(bg, box)
+    pygame.draw.rect(screen, (180, 160, 90), box, 1, border_radius=10)
+    screen.blit(surf, surf.get_rect(center=box.center))
 
 
 def wrap_text(text, font_obj, max_width):
@@ -4229,7 +4299,9 @@ MENU_RED = (224, 104, 92)         # EXIT label
 app_state = "menu"  # "menu" | "modeselect" | "lobby" | "playing" | "catalog" | "settings"
 menu_selected = 0
 modeselect_selected = 0
-game_mode = "pvp"  # "pvp" (hot-seat) | "pvc" (computer plays Black) | "online" (LAN)
+game_mode = "pvp"  # "pvp" (hot-seat) | "pvc" (vs computer) | "online" (LAN)
+human_color = WHITE  # in PvC, the side the human plays (computer takes the other)
+difficulty = "Medium"  # "Easy" | "Medium" | "Hard"
 
 # LAN play (host-authoritative full-state sync). All None until a game is hosted
 # or joined; see the "Online play" block near the main loop.
@@ -4239,6 +4311,7 @@ net_join_text = ""      # host address the joiner types (blank = auto-find)
 _net_prev_turn = None   # for detecting "I just ended my turn" -> push state
 _net_prev_over = False
 _online_dealt = False   # host: has it dealt + sent the opening position yet
+_last_saved_turn = None  # auto-save the local game whenever the turn changes
 
 # Smooth fade-to-black transition between screens. progress runs 0 -> 1; the
 # screen switches at the half-way point (fully black), so it fades out then in.
@@ -4291,6 +4364,15 @@ MENU_ITEMS = [
     {"label": "SETTINGS", "action": "settings", "icon": "gear", "key": "S", "accent": MENU_WHITE},
     {"label": "EXIT", "action": "exit", "icon": "x", "key": "Q", "accent": MENU_RED},
 ]
+
+
+def current_menu_items():
+    # CONTINUE appears only when a saved game exists (just below START).
+    items = list(MENU_ITEMS)
+    if has_save():
+        items.insert(1, {"label": "CONTINUE", "action": "continue",
+                         "icon": "heart", "key": "enter", "accent": MENU_GREEN})
+    return items
 
 
 def draw_menu_background():
@@ -4389,7 +4471,7 @@ def get_menu_rects():
     gap = max(10, int(SCREEN_HEIGHT * 0.018))
     top = int(SCREEN_HEIGHT * 0.46)
     x = (SCREEN_WIDTH - bw) // 2
-    return [pygame.Rect(x, top + i * (bh + gap), bw, bh) for i in range(len(MENU_ITEMS))]
+    return [pygame.Rect(x, top + i * (bh + gap), bw, bh) for i in range(len(current_menu_items()))]
 
 
 def draw_back_hint():
@@ -4452,7 +4534,7 @@ def draw_start_screen():
 
     # Menu buttons: flat rounded bars with a left-aligned label. The selected
     # one is a filled gold bar with dark text and a glow; the rest are dark glass.
-    for i, (item, rect) in enumerate(zip(MENU_ITEMS, get_menu_rects())):
+    for i, (item, rect) in enumerate(zip(current_menu_items(), get_menu_rects())):
         selected = i == menu_selected
         accent = item["accent"]
 
@@ -4591,6 +4673,8 @@ def draw_settings_screen():
         ("WHITE PIECES", PIECE_SKINS[white_skin_index]["name"], "1"),
         ("BLACK PIECES", PIECE_SKINS[black_skin_index]["name"], "2"),
         ("BOARD", f"#{current_board_index + 1}", "B"),
+        ("DIFFICULTY (vs CPU)", difficulty, "D"),
+        ("PLAY AS (vs CPU)", "White" if human_color == WHITE else "Black", "P"),
     ]
     for label, value, key in rows:
         draw_shadow_text(menu_font, label, MENU_WHITE, (x, y))
@@ -4610,6 +4694,9 @@ def menu_activate(action):
     global running
     if action == "start":
         request_transition("modeselect")
+    elif action == "continue":
+        if load_game():
+            request_transition("playing")
     elif action == "catalog":
         request_transition("catalog")
     elif action == "settings":
@@ -4620,22 +4707,24 @@ def menu_activate(action):
 
 def handle_menu_events(events):
     global menu_selected, running
+    items = current_menu_items()
     rects = get_menu_rects()
     mx, my = pygame.mouse.get_pos()
     for i, r in enumerate(rects):
         if r.collidepoint(mx, my):
             menu_selected = i
+    menu_selected %= len(items)
 
     for event in events:
         if event.type == pygame.QUIT:
             running = False
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_UP:
-                menu_selected = (menu_selected - 1) % len(MENU_ITEMS)
+                menu_selected = (menu_selected - 1) % len(items)
             elif event.key == pygame.K_DOWN:
-                menu_selected = (menu_selected + 1) % len(MENU_ITEMS)
+                menu_selected = (menu_selected + 1) % len(items)
             elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
-                menu_activate(MENU_ITEMS[menu_selected]["action"])
+                menu_activate(items[menu_selected]["action"])
             elif event.key == pygame.K_c:
                 menu_activate("catalog")
             elif event.key == pygame.K_s:
@@ -4645,7 +4734,7 @@ def handle_menu_events(events):
         elif event.type == pygame.MOUSEBUTTONDOWN:
             for i, r in enumerate(rects):
                 if r.collidepoint(event.pos):
-                    menu_activate(MENU_ITEMS[i]["action"])
+                    menu_activate(items[i]["action"])
 
 
 def handle_catalog_events(events):
@@ -4663,18 +4752,21 @@ def handle_catalog_events(events):
                         enabled_cards.discard(name)
                     else:
                         enabled_cards.add(name)
+                    save_config()
                     break
 
 
 def handle_settings_events(events):
     global running, music_muted, white_skin_index, black_skin_index
     global current_board_index, BOARD_IMAGE, BOARD_IMAGE_OX, BOARD_IMAGE_OY, LIGHT_SQUARE, DARK_SQUARE
+    global difficulty, human_color
     for event in events:
         if event.type == pygame.QUIT:
             running = False
         elif event.type == pygame.KEYDOWN:
             if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
                 request_transition("menu")
+                continue
             elif event.key == pygame.K_m and _audio_ok:
                 music_muted = not music_muted
                 pygame.mixer.music.set_volume(0.0 if music_muted else 0.5)
@@ -4687,6 +4779,15 @@ def handle_settings_events(events):
                 BOARD_IMAGE, BOARD_IMAGE_OX, BOARD_IMAGE_OY, LIGHT_SQUARE, DARK_SQUARE = (
                     load_pixel_board(BOARD_FILES[current_board_index])
                 )
+            elif event.key == pygame.K_d:
+                order = list(DIFFICULTY_SETTINGS.keys())
+                difficulty = order[(order.index(difficulty) + 1) % len(order)]
+                configure_engine()
+            elif event.key == pygame.K_p:
+                human_color = BLACK if human_color == WHITE else WHITE
+            else:
+                continue
+            save_config()  # persist whatever just changed
 
 
 # -----------------------------
@@ -4738,8 +4839,9 @@ def draw_modeselect_screen():
 
 
 def start_mode(mode):
-    global game_mode, net, net_local_color, _online_dealt
+    global game_mode, net, net_local_color, _online_dealt, _last_saved_turn
     ai_reset()
+    _last_saved_turn = None  # force a fresh auto-save on the first frame
 
     if mode in ("host", "join"):
         global net_join_text
@@ -4764,6 +4866,7 @@ def start_mode(mode):
     net_local_color = None
     if mode == "pvc":
         ensure_engine()
+        configure_engine()  # apply the current difficulty to a reused engine
     request_transition("playing", on_switch=start_new_game)
 
 
@@ -4812,6 +4915,33 @@ _ai = {
     "gen": 0,          # bumped on reset so a stale background result is ignored
 }
 
+# Per-difficulty think time and capped strength (Stockfish UCI_Elo). "Hard" runs
+# at full strength.
+DIFFICULTY_SETTINGS = {
+    "Easy":   {"time": 0.05, "elo": 1320},
+    "Medium": {"time": 0.10, "elo": 1700},
+    "Hard":   {"time": 0.25, "elo": None},
+}
+
+
+def ai_color():
+    # The colour the computer plays in PvC: the opposite of the human's.
+    return BLACK if human_color == WHITE else WHITE
+
+
+def configure_engine():
+    eng = _ai["engine"]
+    if eng is None:
+        return
+    cfg = DIFFICULTY_SETTINGS.get(difficulty, DIFFICULTY_SETTINGS["Medium"])
+    try:
+        if cfg["elo"] is None:
+            eng.configure({"UCI_LimitStrength": False})
+        else:
+            eng.configure({"UCI_LimitStrength": True, "UCI_Elo": cfg["elo"]})
+    except Exception as exc:
+        print("engine configure failed:", exc)
+
 
 def ensure_engine():
     if _ai["tried"]:
@@ -4827,6 +4957,7 @@ def ensure_engine():
     except Exception as exc:
         print("Stockfish unavailable, using basic AI:", exc)
         _ai["engine"] = None
+    configure_engine()
     return _ai["engine"]
 
 
@@ -4891,11 +5022,13 @@ def _uci_to_coords(move):
 def _fallback_move(g):
     # Used when Stockfish is missing or the position isn't legal standard chess
     # (cards can create such positions). Greedy: grab the best capture, else any.
+    me = ai_color()
+    foe = human_color
     moves = []
     for r in range(ROWS):
         for c in range(COLS):
             p = g.board[r][c]
-            if p is not None and g.piece_color(p) == BLACK:
+            if p is not None and g.piece_color(p) == me:
                 for (tr, tc) in g.get_legal_moves(r, c):
                     moves.append(((r, c), (tr, tc)))
     if not moves:
@@ -4905,7 +5038,7 @@ def _fallback_move(g):
     def capture_value(m):
         tr, tc = m[1]
         tp = g.board[tr][tc]
-        return g.get_piece_value(tp) if (tp is not None and g.piece_color(tp) == WHITE) else 0
+        return g.get_piece_value(tp) if (tp is not None and g.piece_color(tp) == foe) else 0
 
     moves.sort(key=capture_value, reverse=True)
     return moves[0]
@@ -4920,7 +5053,8 @@ def _think(fen, gen):
             import chess.engine
             board = chess.Board(fen)
             if board.is_valid():
-                res = eng.play(board, chess.engine.Limit(time=0.15))
+                think_time = DIFFICULTY_SETTINGS.get(difficulty, DIFFICULTY_SETTINGS["Medium"])["time"]
+                res = eng.play(board, chess.engine.Limit(time=think_time))
                 if res.move is not None:
                     result = _uci_to_coords(res.move)
     except Exception as exc:
@@ -4938,22 +5072,23 @@ def _apply_ai_move(move):
         game.end_turn()  # no legal move - let the game resolve mate/stalemate
         return
     (fr, fc), (tr, tc) = move
+    me = ai_color()
     before = game.moves_made_this_turn
     game.select_square(fr, fc)
     game.select_square(tr, tc)
-    if game.moves_made_this_turn == before and game.turn == BLACK:
+    if game.moves_made_this_turn == before and game.turn == me:
         fb = _fallback_move(game)  # engine move wasn't legal in-game; try our own
         if fb:
             game.select_square(*fb[0])
             game.select_square(*fb[1])
-    if game.turn == BLACK and not game.game_over:
+    if game.turn == me and not game.game_over:
         game.end_turn()
 
 
 def ai_update():
-    # Drive Black with the engine in PvC. Non-blocking: the search runs on a
-    # worker thread and the move is applied on the main thread when it's ready.
-    if game_mode != "pvc" or game.game_over or game.turn != BLACK or game.active_card is not None:
+    # Drive the computer's colour with the engine in PvC. Non-blocking: the
+    # search runs on a worker thread, applied on the main thread when ready.
+    if game_mode != "pvc" or game.game_over or game.turn != ai_color() or game.active_card is not None:
         _ai["earliest"] = 0
         return
 
@@ -5174,10 +5309,115 @@ def handle_lobby_events(events):
 
 
 # -----------------------------
+# Saved settings + saved game (on disk)
+# -----------------------------
+import json
+
+CONFIG_PATH = os.path.join(_BASE_DIR, "config.json")
+SAVE_PATH = os.path.join(_BASE_DIR, "savegame.pkl")
+
+
+def save_config():
+    data = {
+        "music_muted": music_muted,
+        "white_skin_index": white_skin_index,
+        "black_skin_index": black_skin_index,
+        "board_index": current_board_index,
+        "difficulty": difficulty,
+        "human_color": human_color,
+        # Store the *disabled* cards so cards added in future updates default on.
+        "disabled_cards": [c for c in ALL_TRAY_CARDS if c not in enabled_cards],
+    }
+    try:
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as exc:
+        print("save_config failed:", exc)
+
+
+def load_config():
+    global music_muted, white_skin_index, black_skin_index, current_board_index
+    global difficulty, human_color
+    global BOARD_IMAGE, BOARD_IMAGE_OX, BOARD_IMAGE_OY, LIGHT_SQUARE, DARK_SQUARE
+    try:
+        with open(CONFIG_PATH) as f:
+            data = json.load(f)
+    except Exception:
+        return  # no config yet, or unreadable - keep defaults
+
+    music_muted = bool(data.get("music_muted", music_muted))
+    white_skin_index = int(data.get("white_skin_index", white_skin_index)) % len(PIECE_SKINS)
+    black_skin_index = int(data.get("black_skin_index", black_skin_index)) % len(PIECE_SKINS)
+    if data.get("difficulty") in DIFFICULTY_SETTINGS:
+        difficulty = data["difficulty"]
+    if data.get("human_color") in (WHITE, BLACK):
+        human_color = data["human_color"]
+
+    disabled = set(data.get("disabled_cards", []))
+    enabled_cards.clear()
+    enabled_cards.update(c for c in ALL_TRAY_CARDS if c not in disabled)
+
+    bi = int(data.get("board_index", current_board_index))
+    if 0 <= bi < len(BOARD_FILES):
+        current_board_index = bi
+        BOARD_IMAGE, BOARD_IMAGE_OX, BOARD_IMAGE_OY, LIGHT_SQUARE, DARK_SQUARE = (
+            load_pixel_board(BOARD_FILES[bi]))
+
+    if music_muted and _audio_ok:
+        pygame.mixer.music.set_volume(0.0)
+
+
+def has_save():
+    return os.path.exists(SAVE_PATH)
+
+
+def save_game():
+    # Auto-saved during local play so a game can be resumed from the menu.
+    if game_mode not in ("pvp", "pvc") or game.game_over:
+        return
+    try:
+        with open(SAVE_PATH, "wb") as f:
+            pickle.dump({"mode": game_mode, "human_color": human_color,
+                         "dict": game.__dict__}, f)
+    except Exception as exc:
+        print("save_game failed:", exc)
+
+
+def delete_save():
+    try:
+        if os.path.exists(SAVE_PATH):
+            os.remove(SAVE_PATH)
+    except Exception:
+        pass
+
+
+def load_game():
+    global game_mode, human_color, dragging_card, dragging_piece
+    try:
+        with open(SAVE_PATH, "rb") as f:
+            data = pickle.load(f)
+    except Exception as exc:
+        print("load_game failed:", exc)
+        return False
+    game_mode = data.get("mode", "pvp")
+    human_color = data.get("human_color", WHITE)
+    game.__dict__.update(data["dict"])
+    animations.clear()
+    dragging_card = None
+    dragging_piece = None
+    ai_reset()
+    if game_mode == "pvc":
+        ensure_engine()
+        configure_engine()
+    return True
+
+
+# -----------------------------
 # Main loop
 # -----------------------------
 start_music()
 music_muted = False
+load_config()   # restore saved settings + catalog (overrides the defaults above)
 running = True
 
 while running:
@@ -5230,7 +5470,7 @@ while running:
 
     # Ignore human board/card input when it isn't this player's turn: the
     # computer's move in PvC, or the opponent's turn online. ESC still works.
-    ai_to_move = (game_mode == "pvc" and game.turn == BLACK and not game.game_over)
+    ai_to_move = (game_mode == "pvc" and game.turn == ai_color() and not game.game_over)
     online_not_my_turn = (
         game_mode == "online" and net is not None
         and (not net.connected or game.turn != net_local_color)
@@ -5244,10 +5484,18 @@ while running:
         if blocked:
             continue  # ignore input mid-fade (events still pumped)
 
+        # The Rematch button stays clickable even when input is otherwise locked.
+        if (event.type == pygame.MOUSEBUTTONDOWN and game.winner_message is not None
+                and rematch_available() and get_rematch_button().collidepoint(event.pos)):
+            do_rematch()
+            continue
+
         if human_locked:
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 if game_mode == "online":
                     net_leave()
+                elif game_mode in ("pvp", "pvc") and not game.game_over:
+                    save_game()
                 request_transition("menu")
             continue
 
@@ -5255,6 +5503,8 @@ while running:
             if event.key == pygame.K_ESCAPE:
                 if game_mode == "online":
                     net_leave()
+                elif game_mode in ("pvp", "pvc") and not game.game_over:
+                    save_game()
                 request_transition("menu")
 
             elif event.key == pygame.K_r and game_mode != "online":
@@ -5263,6 +5513,7 @@ while running:
                 dragging_card = None
                 dragging_piece = None
                 ai_reset()
+                _last_saved_turn = None
                 animate_initial_hand()
 
             elif event.key == pygame.K_m and _audio_ok:
@@ -5299,7 +5550,7 @@ while running:
                 game.start_turn_effects()
                 game.update_status()
 
-            elif event.key == pygame.K_SPACE:
+            elif event.key in (pygame.K_SPACE, pygame.K_e):
                 game.end_turn()
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
@@ -5417,6 +5668,14 @@ while running:
         net_leave()
         request_transition("menu")
 
+    # Auto-save local games so CONTINUE can resume them; clear it when one ends.
+    if game_mode in ("pvp", "pvc"):
+        if game.game_over:
+            delete_save()
+        elif game.turn != _last_saved_turn:
+            save_game()
+            _last_saved_turn = game.turn
+
     draw_background()
     draw_board()
     draw_fire_tiles()
@@ -5424,6 +5683,7 @@ while running:
     draw_card_target_hints()
     draw_animations()
     draw_game_over_overlay()
+    draw_wait_banner()
     draw_move_log()
     draw_sidebar()
     draw_dragging_card()
