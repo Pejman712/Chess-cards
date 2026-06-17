@@ -444,6 +444,10 @@ GENERAL_CARDS = [
 # Tray order: piece-power cards first, then game cards.
 ALL_TRAY_CARDS = PIECE_POWER_CARDS + GENERAL_CARDS
 
+# Which cards are allowed into a new game's decks. Toggled per-card in the
+# Catalog screen (ticked = in the game). Starts with every card enabled.
+enabled_cards = set(ALL_TRAY_CARDS)
+
 # Which of your pieces a draggable card may be played on. A piece letter means
 # only that type; "any" means any of your pieces; "non_king" means any but the
 # king. Used to highlight valid targets while a card is being dragged.
@@ -1013,10 +1017,19 @@ def draw_animations():
             tr, tc = ex["to"]
             fx, fy = board_to_screen(fr, fc)
             tx, ty = board_to_screen(tr, tc)
+            surf = get_piece_surface(ex["piece"])
+
+            if ex.get("delay", 0) > 0:
+                # Waiting its turn: sit still at the starting square. (Its real
+                # board square is hidden, so it must be drawn here meanwhile.)
+                ex["delay"] -= 1
+                rect = surf.get_rect(midbottom=(fx + SQUARE_W // 2, fy + SQUARE_H - SQUARE_H // 12))
+                screen.blit(surf, rect)
+                continue
+
             ease = 1 - (1 - progress) ** 2  # ease-out toward the centre
             cx = fx + (tx - fx) * ease
             cy = fy + (ty - fy) * ease
-            surf = get_piece_surface(ex["piece"])
             rect = surf.get_rect(midbottom=(cx + SQUARE_W // 2, cy + SQUARE_H - SQUARE_H // 12))
             screen.blit(surf, rect)
 
@@ -1202,8 +1215,10 @@ class GameState:
     ABILITY_CARDS = ("pawntastic", "queentum", "windknight", "inzone")
 
     def deal_starting_hands(self):
+        # Only the cards ticked in the Catalog are dealt into the decks.
+        active = [c for c in ALL_TRAY_CARDS if c in enabled_cards]
         for color in (WHITE, BLACK):
-            self.deck[color] = list(ALL_TRAY_CARDS)
+            self.deck[color] = list(active)
             random.shuffle(self.deck[color])
             self.hand[color] = []
             self.discard[color] = []
@@ -2238,11 +2253,15 @@ class GameState:
             if self.inzone_square == (fr, fc):
                 self.inzone_square = (cr, cc)
 
-            # A gentle slide from where the piece started to its new spot.
+            # A gentle slide from where the piece started to its new spot,
+            # staggered so the pieces closest to the point fall first and the
+            # outer ones follow a beat later (an inward ripple).
+            stagger = max(abs(fr - row), abs(fc - col)) * 5
             add_animation("slide", frames=48, extra={
                 "piece": piece,
                 "from": (fr, fc),
                 "to": (cr, cc),
+                "delay": stagger,
             })
             moved += 1
 
@@ -4173,8 +4192,10 @@ MENU_GOLD = (240, 188, 40)        # CHESSBYTE "BYTE" + selected button
 MENU_GOLD_DARK = (40, 30, 6)      # text on top of the gold button
 MENU_RED = (224, 104, 92)         # EXIT label
 
-app_state = "menu"  # "menu" | "playing" | "catalog" | "settings"
+app_state = "menu"  # "menu" | "modeselect" | "playing" | "catalog" | "settings"
 menu_selected = 0
+modeselect_selected = 0
+game_mode = "pvp"  # "pvp" (hot-seat) | "pvc" (computer plays Black)
 
 # Smooth fade-to-black transition between screens. progress runs 0 -> 1; the
 # screen switches at the half-way point (fully black), so it fades out then in.
@@ -4446,25 +4467,71 @@ def draw_start_screen():
     screen.blit(conf, (x, SCREEN_HEIGHT - 40))
 
 
+CATALOG_COL_W = int(SCREEN_WIDTH * 0.42)
+
+
+def get_catalog_rects():
+    # Shared by the catalog's draw and click handling so the checkbox/row
+    # hit-boxes always line up with what is on screen.
+    cards = PIECE_POWER_CARDS + GENERAL_CARDS
+    x0 = (SCREEN_WIDTH - CATALOG_COL_W * 2 - 50) // 2
+    y0 = int(SCREEN_HEIGHT * 0.24)
+    rows = (len(cards) + 1) // 2
+    line_h = int((SCREEN_HEIGHT * 0.62) / rows)
+    box = max(18, int(line_h * 0.30))
+
+    out = []
+    for i, name in enumerate(cards):
+        x = x0 + (i % 2) * (CATALOG_COL_W + 50)
+        y = y0 + (i // 2) * line_h
+        check = pygame.Rect(x, y, box, box)
+        row = pygame.Rect(x, y - 2, CATALOG_COL_W, line_h - 4)
+        out.append((name, check, row))
+    return out
+
+
 def draw_catalog_screen():
     draw_menu_background()
     screen.blit(menu_title_font.render("CATALOG", True, MENU_PINK),
                 draw_glow_title("CATALOG", MENU_PINK, (SCREEN_WIDTH // 2, int(SCREEN_HEIGHT * 0.12))))
 
-    cards = PIECE_POWER_CARDS + GENERAL_CARDS
-    col_w = int(SCREEN_WIDTH * 0.42)
-    x0 = (SCREEN_WIDTH - col_w * 2 - 50) // 2
-    y0 = int(SCREEN_HEIGHT * 0.24)
-    rows = (len(cards) + 1) // 2
-    line_h = int((SCREEN_HEIGHT * 0.62) / rows)
+    # A soft panel behind the list so the cards read against the busy galaxy.
+    rects = get_catalog_rects()
+    bounds = rects[0][2].unionall([r for _, _, r in rects])
+    panel_rect = bounds.inflate(48, 48)
+    panel = pygame.Surface(panel_rect.size, pygame.SRCALPHA)
+    pygame.draw.rect(panel, (*MENU_BG1, 205), panel.get_rect(), border_radius=16)
+    screen.blit(panel, panel_rect)
+    pygame.draw.rect(screen, MENU_PINK, panel_rect, 2, border_radius=16)
 
-    for i, name in enumerate(cards):
+    mx, my = pygame.mouse.get_pos()
+    for name, check, row in rects:
         disp, _, desc = CARD_INFO.get(name, (name, (0, 0, 0), ""))
         cost = CARD_COSTS.get(name, 0)
-        x = x0 + (i % 2) * (col_w + 50)
-        y = y0 + (i // 2) * line_h
-        draw_shadow_text(small_font, f"{disp}  ({cost})", MENU_CYAN, (x, y))
-        draw_shadow_text(tiny_font, clip_text(tiny_font, desc, col_w - 10), MENU_MUTED, (x, y + 20))
+        on = name in enabled_cards
+        hover = row.collidepoint(mx, my)
+
+        # Checkbox: a box that holds a tick when the card is in the game.
+        border = MENU_GREEN if on else (MENU_WHITE if hover else MENU_MUTED)
+        pygame.draw.rect(screen, border, check, 2, border_radius=4)
+        if on:
+            pygame.draw.lines(screen, MENU_GREEN, False, [
+                (check.left + check.w * 0.20, check.top + check.h * 0.52),
+                (check.left + check.w * 0.42, check.top + check.h * 0.74),
+                (check.left + check.w * 0.80, check.top + check.h * 0.26),
+            ], 3)
+
+        tx = check.right + 12
+        title_color = MENU_CYAN if on else MENU_MUTED
+        draw_shadow_text(small_font, f"{disp}  ({cost})", title_color, (tx, check.top - 2))
+        draw_shadow_text(tiny_font, clip_text(tiny_font, desc, CATALOG_COL_W - (tx - row.left) - 10),
+                         MENU_MUTED, (tx, check.top + 20))
+
+    enabled_n = sum(1 for c in (PIECE_POWER_CARDS + GENERAL_CARDS) if c in enabled_cards)
+    draw_shadow_text(small_font,
+                     f"CLICK A CARD TO TICK IT IN / OUT  -  {enabled_n} IN THE GAME",
+                     MENU_WHITE, (SCREEN_WIDTH // 2 - int(SCREEN_WIDTH * 0.18),
+                                  int(SCREEN_HEIGHT * 0.88)))
 
     draw_back_hint()
 
@@ -4499,7 +4566,7 @@ def draw_settings_screen():
 def menu_activate(action):
     global running
     if action == "start":
-        request_transition("playing", on_switch=start_new_game)
+        request_transition("modeselect")
     elif action == "catalog":
         request_transition("catalog")
     elif action == "settings":
@@ -4545,8 +4612,15 @@ def handle_catalog_events(events):
             running = False
         elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
             request_transition("menu")
-        elif event.type == pygame.MOUSEBUTTONDOWN:
-            request_transition("menu")
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            # Click a card row to tick it in or out of the game.
+            for name, check, row in get_catalog_rects():
+                if row.collidepoint(event.pos):
+                    if name in enabled_cards:
+                        enabled_cards.discard(name)
+                    else:
+                        enabled_cards.add(name)
+                    break
 
 
 def handle_settings_events(events):
@@ -4573,6 +4647,279 @@ def handle_settings_events(events):
 
 
 # -----------------------------
+# Mode select (Player vs Player / Player vs Computer)
+# -----------------------------
+MODE_ITEMS = [
+    {"label": "PLAYER VS COMPUTER", "mode": "pvc",
+     "sub": "You play White vs Stockfish (regular chess). You can still play cards."},
+    {"label": "PLAYER VS PLAYER", "mode": "pvp",
+     "sub": "Two players, hot-seat on the same screen."},
+]
+
+
+def get_modeselect_rects():
+    bw = int(min(760, SCREEN_WIDTH * 0.62))
+    bh = max(64, int(SCREEN_HEIGHT * 0.12))
+    gap = int(bh * 0.55)
+    top = int(SCREEN_HEIGHT * 0.34)
+    x = (SCREEN_WIDTH - bw) // 2
+    return [pygame.Rect(x, top + i * (bh + gap), bw, bh) for i in range(len(MODE_ITEMS))]
+
+
+def draw_modeselect_screen():
+    draw_menu_background()
+    screen.blit(menu_title_font.render("CHOOSE MODE", True, MENU_GOLD),
+                draw_glow_title("CHOOSE MODE", MENU_GOLD, (SCREEN_WIDTH // 2, int(SCREEN_HEIGHT * 0.16))))
+
+    mx, my = pygame.mouse.get_pos()
+    for i, (item, rect) in enumerate(zip(MODE_ITEMS, get_modeselect_rects())):
+        selected = i == modeselect_selected or rect.collidepoint(mx, my)
+        pygame.draw.rect(screen, MENU_GOLD if selected else MENU_BG2, rect, border_radius=12)
+        pygame.draw.rect(screen, MENU_WHITE if selected else MENU_MUTED, rect, 2, border_radius=12)
+        tcol = MENU_GOLD_DARK if selected else (228, 228, 238)
+        label = menu_option_font.render(item["label"], True, tcol)
+        screen.blit(label, label.get_rect(center=rect.center))
+        sub = tiny_font.render(item["sub"], True, MENU_MUTED)
+        screen.blit(sub, sub.get_rect(midtop=(rect.centerx, rect.bottom + 8)))
+
+    draw_back_hint()
+
+
+def start_mode(mode):
+    global game_mode
+    game_mode = mode
+    ai_reset()
+    if mode == "pvc":
+        ensure_engine()
+    request_transition("playing", on_switch=start_new_game)
+
+
+def handle_modeselect_events(events):
+    global running, modeselect_selected
+    rects = get_modeselect_rects()
+    mx, my = pygame.mouse.get_pos()
+    for i, r in enumerate(rects):
+        if r.collidepoint(mx, my):
+            modeselect_selected = i
+
+    for event in events:
+        if event.type == pygame.QUIT:
+            running = False
+        elif event.type == pygame.KEYDOWN:
+            if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+                request_transition("menu")
+            elif event.key == pygame.K_UP:
+                modeselect_selected = (modeselect_selected - 1) % len(MODE_ITEMS)
+            elif event.key == pygame.K_DOWN:
+                modeselect_selected = (modeselect_selected + 1) % len(MODE_ITEMS)
+            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                start_mode(MODE_ITEMS[modeselect_selected]["mode"])
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            for i, r in enumerate(rects):
+                if r.collidepoint(event.pos):
+                    start_mode(MODE_ITEMS[i]["mode"])
+
+
+# -----------------------------
+# Computer opponent (Stockfish - regular chess only; cards stay human-only)
+# -----------------------------
+import threading
+
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
+STOCKFISH_PATH = os.environ.get("STOCKFISH_PATH") or os.path.join(
+    _BASE_DIR, "engine", "stockfish_bin")
+
+_ai = {
+    "engine": None,    # chess.engine.SimpleEngine, or None to use the basic fallback
+    "tried": False,    # have we attempted to open the engine yet
+    "thinking": False,
+    "result": None,    # ((fr,fc),(tr,tc)) | "fallback" | None
+    "earliest": 0,     # ms: don't start thinking before this (let animations settle)
+    "show_until": 0,   # ms: don't apply the move before this (so it isn't instant)
+    "gen": 0,          # bumped on reset so a stale background result is ignored
+}
+
+
+def ensure_engine():
+    if _ai["tried"]:
+        return _ai["engine"]
+    _ai["tried"] = True
+    try:
+        import chess.engine
+        if os.path.exists(STOCKFISH_PATH):
+            _ai["engine"] = chess.engine.SimpleEngine.popen_uci(STOCKFISH_PATH)
+            print("Stockfish loaded:", STOCKFISH_PATH)
+        else:
+            print("Stockfish binary not found at", STOCKFISH_PATH, "- using basic AI.")
+    except Exception as exc:
+        print("Stockfish unavailable, using basic AI:", exc)
+        _ai["engine"] = None
+    return _ai["engine"]
+
+
+def ai_reset():
+    _ai["gen"] += 1
+    _ai["thinking"] = False
+    _ai["result"] = None
+    _ai["earliest"] = 0
+    _ai["show_until"] = 0
+
+
+def _board_to_fen(g):
+    # The board already uses uppercase=White / lowercase=Black, which is exactly
+    # FEN's convention, so piece letters map straight across. Row 0 is rank 8.
+    ranks = []
+    for r in range(ROWS):
+        run, s = 0, ""
+        for c in range(COLS):
+            p = g.board[r][c]
+            if p is None:
+                run += 1
+            else:
+                if run:
+                    s += str(run)
+                    run = 0
+                s += p
+        if run:
+            s += str(run)
+        ranks.append(s)
+    placement = "/".join(ranks)
+    active = "w" if g.turn == WHITE else "b"
+
+    rights = ""
+    if not g.white_king_moved:
+        if not g.white_right_rook_moved:
+            rights += "K"
+        if not g.white_left_rook_moved:
+            rights += "Q"
+    if not g.black_king_moved:
+        if not g.black_right_rook_moved:
+            rights += "k"
+        if not g.black_left_rook_moved:
+            rights += "q"
+    rights = rights or "-"
+
+    ep = "-"
+    if g.en_passant_target is not None:
+        er, ec = g.en_passant_target
+        if 0 <= er < 8 and 0 <= ec < 8:
+            ep = "abcdefgh"[ec] + str(8 - er)
+
+    return f"{placement} {active} {rights} {ep} 0 1"
+
+
+def _uci_to_coords(move):
+    import chess
+    frm = (7 - chess.square_rank(move.from_square), chess.square_file(move.from_square))
+    to = (7 - chess.square_rank(move.to_square), chess.square_file(move.to_square))
+    return (frm, to)
+
+
+def _fallback_move(g):
+    # Used when Stockfish is missing or the position isn't legal standard chess
+    # (cards can create such positions). Greedy: grab the best capture, else any.
+    moves = []
+    for r in range(ROWS):
+        for c in range(COLS):
+            p = g.board[r][c]
+            if p is not None and g.piece_color(p) == BLACK:
+                for (tr, tc) in g.get_legal_moves(r, c):
+                    moves.append(((r, c), (tr, tc)))
+    if not moves:
+        return None
+    random.shuffle(moves)
+
+    def capture_value(m):
+        tr, tc = m[1]
+        tp = g.board[tr][tc]
+        return g.get_piece_value(tp) if (tp is not None and g.piece_color(tp) == WHITE) else 0
+
+    moves.sort(key=capture_value, reverse=True)
+    return moves[0]
+
+
+def _think(fen, gen):
+    result = None
+    try:
+        eng = _ai["engine"]
+        if eng is not None:
+            import chess
+            import chess.engine
+            board = chess.Board(fen)
+            if board.is_valid():
+                res = eng.play(board, chess.engine.Limit(time=0.15))
+                if res.move is not None:
+                    result = _uci_to_coords(res.move)
+    except Exception as exc:
+        print("AI think error:", exc)
+        result = None
+    if gen == _ai["gen"]:  # ignore if a new game/reset happened meanwhile
+        _ai["result"] = result if result is not None else "fallback"
+        _ai["thinking"] = False
+
+
+def _apply_ai_move(move):
+    if move == "fallback" or move is None:
+        move = _fallback_move(game)
+    if move is None:
+        game.end_turn()  # no legal move - let the game resolve mate/stalemate
+        return
+    (fr, fc), (tr, tc) = move
+    before = game.moves_made_this_turn
+    game.select_square(fr, fc)
+    game.select_square(tr, tc)
+    if game.moves_made_this_turn == before and game.turn == BLACK:
+        fb = _fallback_move(game)  # engine move wasn't legal in-game; try our own
+        if fb:
+            game.select_square(*fb[0])
+            game.select_square(*fb[1])
+    if game.turn == BLACK and not game.game_over:
+        game.end_turn()
+
+
+def ai_update():
+    # Drive Black with the engine in PvC. Non-blocking: the search runs on a
+    # worker thread and the move is applied on the main thread when it's ready.
+    if game_mode != "pvc" or game.game_over or game.turn != BLACK or game.active_card is not None:
+        _ai["earliest"] = 0
+        return
+
+    # Wait for the human's move/card animation to finish before replying.
+    if any(a["kind"] in ("meteor_sprite", "slide", "teleport", "piece_land", "piece_drop")
+           for a in animations):
+        return
+
+    now = pygame.time.get_ticks()
+    if not _ai["thinking"] and _ai["result"] is None:
+        if _ai["earliest"] == 0:
+            _ai["earliest"] = now + 300
+            return
+        if now >= _ai["earliest"]:
+            _ai["thinking"] = True
+            _ai["show_until"] = now + 250
+            threading.Thread(target=_think, args=(_board_to_fen(game), _ai["gen"]),
+                             daemon=True).start()
+    elif _ai["result"] is not None and now >= _ai["show_until"]:
+        move = _ai["result"]
+        _ai["result"] = None
+        _ai["thinking"] = False
+        _ai["earliest"] = 0
+        _apply_ai_move(move)
+
+
+import atexit
+
+
+@atexit.register
+def _close_engine():
+    try:
+        if _ai["engine"] is not None:
+            _ai["engine"].quit()
+    except Exception:
+        pass
+
+
+# -----------------------------
 # Main loop
 # -----------------------------
 start_music()
@@ -4593,6 +4940,8 @@ while running:
                     running = False
         elif app_state == "menu":
             handle_menu_events(events)
+        elif app_state == "modeselect":
+            handle_modeselect_events(events)
         elif app_state == "catalog":
             handle_catalog_events(events)
         elif app_state == "settings":
@@ -4600,6 +4949,8 @@ while running:
 
         if app_state == "menu":
             draw_start_screen()
+        elif app_state == "modeselect":
+            draw_modeselect_screen()
         elif app_state == "catalog":
             draw_catalog_screen()
         elif app_state == "settings":
@@ -4612,12 +4963,21 @@ while running:
         clock.tick(60)
         continue
 
+    # While the computer is to move (PvC, Black), ignore human board/card input
+    # so the player can't act on the AI's turn; ESC still returns to the menu.
+    ai_to_move = (game_mode == "pvc" and game.turn == BLACK and not game.game_over)
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
             continue
         if blocked:
             continue  # ignore input mid-fade (events still pumped)
+
+        if ai_to_move:
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                request_transition("menu")
+            continue
 
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
@@ -4627,6 +4987,7 @@ while running:
                 game = GameState()
                 dragging_card = None
                 dragging_piece = None
+                ai_reset()
                 animate_initial_hand()
 
             elif event.key == pygame.K_m and _audio_ok:
@@ -4770,6 +5131,9 @@ while running:
     if game.cheat_mode:
         game.ether[WHITE] = 9999
         game.ether[BLACK] = 9999
+
+    # Let the computer take Black's turn in PvC (no-op otherwise).
+    ai_update()
 
     draw_background()
     draw_board()
