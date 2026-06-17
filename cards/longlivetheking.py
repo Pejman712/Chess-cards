@@ -1,9 +1,17 @@
-# cards/longlivetheking.py
-
 import random
 
 
 def get_empty_escape_corners(game):
+    """
+    LongLiveTheKing:
+    The king may escape to one random empty corner.
+
+    Corners:
+    - top-left:     (0, 0)
+    - top-right:    (0, 7)
+    - bottom-left:  (7, 0)
+    - bottom-right: (7, 7)
+    """
     corners = [(0, 0), (0, 7), (7, 0), (7, 7)]
     return [corner for corner in corners if game.board[corner[0]][corner[1]] is None]
 
@@ -18,6 +26,10 @@ def choose_random_escape_corner(game):
 
 
 def get_surrounding_empty_squares(game, row, col):
+    """
+    Returns every empty neighboring square around the escaped king.
+    Includes diagonals.
+    """
     squares = []
 
     for dr in [-1, 0, 1]:

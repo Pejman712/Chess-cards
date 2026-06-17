@@ -1,0 +1,7 @@
+# Stockfish engine binary (large, platform-specific - download per machine).
+# See requirements.txt / README for how to fetch it.
+engine/
+
+# Python bytecode
+__pycache__/
+*.pyc
