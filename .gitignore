@@ -9,3 +9,12 @@ __pycache__/
 # Local settings + saved game
 config.json
 savegame.pkl
+
+# Godot editor cache (regenerated on open, not source)
+godot/.godot/
+
+# Stockfish binary bundled for the Godot AI (same reasoning as engine/ above)
+godot/engine/
+
+# Godot save/config written to user:// at runtime
+godot/.local/
