@@ -10,7 +10,7 @@ from cards.bishock import get_bishock_destroyed_squares
 from cards.rookdemon import get_rookdemon_path
 from cards.windknight import is_valid_windknight_target
 from cards.queentum import get_queentum_moves
-from cards.longlivetheking import choose_random_escape_corner, get_empty_escape_corners, get_surrounding_empty_squares
+from cards.longlivetheking import get_empty_escape_corners
 
 pygame.init()
 
@@ -166,7 +166,6 @@ menu_title_font = load_font(96, 64, bold=True)
 menu_font = load_font(32, 26, bold=True)
 home_title_font = load_font(160, 120, bold=True)  # big CHESSBYTE logo
 menu_option_font = load_font(40, 30, bold=True)   # START / CATALOG / ...
-subtitle_font = load_font(26, 20, bold=True)      # DEAL . DEPLOY . CHECKMATE
 hint_font = load_font(22, 18, bold=True)          # footer controls hint
 action_font = load_font(32, 24, bold=True)        # END TURN / DISCARD buttons
 
@@ -380,103 +379,16 @@ black_skin_index = 1  # Onyx
 # -----------------------------
 # Card images
 # -----------------------------
-CARD_NAMES = [
-    "pawntastic",
-    "bishock",
-    "rookdemon",
-    "windknight",
-    "queentum",
-    "longlivetheking",
-
-    # Game cards: bought with Ether and played directly.
-    "switchero",
-    "prophecy",
-    "armageddon",
-    "thedramatic",
-    "capitalism",
-    "plague",
-    "solo",
-    "absoluteprotection",
-    "timetraveler",
-    "extrablood",
-    "chrisma",
-    "inzone",
-    "nope",
-    "communism",
-    "gambit",
-    "propaganda",
-    "ifeelsafe",
-    "iguess",
-    "gravitystorm",
-]
-
-PIECE_POWER_CARDS = [
-    "pawntastic",
-    "bishock",
-    "rookdemon",
-    "windknight",
-    "queentum",
-    "longlivetheking",
-]
-
-GENERAL_CARDS = [
-    "switchero",
-    "prophecy",
-    "armageddon",
-    "thedramatic",
-    "capitalism",
-    "plague",
-    "solo",
-    "absoluteprotection",
-    "timetraveler",
-    "extrablood",
-    "chrisma",
-    "inzone",
-    "nope",
-    "communism",
-    "gambit",
-    "propaganda",
-    "ifeelsafe",
-    "iguess",
-    "gravitystorm",
-]
-
-# Tray order: piece-power cards first, then game cards.
-ALL_TRAY_CARDS = PIECE_POWER_CARDS + GENERAL_CARDS
+from carddata import (
+    CARD_NAMES, PIECE_POWER_CARDS, GENERAL_CARDS, ALL_TRAY_CARDS,
+    CARD_TARGET_TYPE, TARGET_CARDS, INSTANT_CARDS, PIECE_VALUES,
+    CARD_COSTS, CARD_INFO,
+)
 
 # Which cards are allowed into a new game's decks. Toggled per-card in the
 # Catalog screen (ticked = in the game). Starts with every card enabled.
 enabled_cards = set(ALL_TRAY_CARDS)
 
-# Which of your pieces a draggable card may be played on. A piece letter means
-# only that type; "any" means any of your pieces; "non_king" means any but the
-# king. Used to highlight valid targets while a card is being dragged.
-CARD_TARGET_TYPE = {
-    "pawntastic": "p",
-    "bishock": "b",
-    "rookdemon": "r",
-    "windknight": "n",
-    "queentum": "q",
-    "longlivetheking": "k",
-    "thedramatic": "any",
-    "inzone": "inzone",  # any of your pieces except king and queen
-    "gambit": "non_king",
-}
-
-# "Target" cards are dragged onto one of your pieces; "instant" cards take
-# effect as soon as they are played. Every card can also be dragged onto the
-# Discard button to throw it away. Each card's activation method is named
-# activate_<name>_on_square (target) or activate_<name> (instant).
-TARGET_CARDS = {
-    "pawntastic", "bishock", "rookdemon", "windknight", "queentum",
-    "longlivetheking", "armageddon", "thedramatic", "inzone", "gambit",
-    "gravitystorm",
-}
-INSTANT_CARDS = {
-    "switchero", "prophecy", "capitalism", "plague", "solo", "absoluteprotection",
-    "timetraveler", "extrablood", "chrisma", "nope", "communism", "propaganda",
-    "ifeelsafe", "iguess",
-}
 
 def load_card_image(path):
     try:
@@ -511,85 +423,6 @@ def get_scaled_card_image(owner, card_name, width, height):
 WHITE = "white"
 BLACK = "black"
 
-# -----------------------------
-# Economy / shop
-# -----------------------------
-# Ether is the in-game currency.
-# Players gain:
-# - 1 Ether per tile moved
-# - captured piece value in Ether
-#
-# Cards are played from hand for Ether; they never recharge (deck system).
-PIECE_VALUES = {
-    "p": 1,
-    "n": 3,
-    "b": 3,
-    "r": 5,
-    "q": 9,
-    "k": 12,
-}
-
-CARD_COSTS = {
-    "pawntastic": PIECE_VALUES["p"],
-    "windknight": PIECE_VALUES["n"],
-    "bishock": PIECE_VALUES["b"],
-    "rookdemon": PIECE_VALUES["r"],
-    "queentum": PIECE_VALUES["q"],
-    "longlivetheking": PIECE_VALUES["k"],
-
-    # Game cards
-    "switchero": 20,
-    "prophecy": 40,
-    "armageddon": 30,
-    "thedramatic": 20,
-    "capitalism": 100,
-    "plague": 60,
-    "solo": 20,
-    "absoluteprotection": 20,
-    "timetraveler": 20,
-    "extrablood": 15,
-    "chrisma": 15,
-    "inzone": 30,
-    "nope": 15,
-    "communism": 20,
-    "gambit": 10,
-    "propaganda": 30,
-    "ifeelsafe": 15,
-    "iguess": 40,
-    "gravitystorm": 30,
-}
-
-ABILITY_CARDS = {
-    "pawntastic",
-    "bishock",
-    "rookdemon",
-    "windknight",
-    "queentum",
-    "longlivetheking",
-}
-
-GAME_CARDS = {
-    "switchero",
-    "prophecy",
-    "armageddon",
-    "thedramatic",
-    "capitalism",
-    "plague",
-    "solo",
-    "absoluteprotection",
-    "timetraveler",
-    "extrablood",
-    "chrisma",
-    "inzone",
-    "nope",
-    "communism",
-    "gambit",
-    "propaganda",
-    "ifeelsafe",
-    "iguess",
-    "gravitystorm",
-}
-
 card_images = {
     WHITE: {},
     BLACK: {},
@@ -598,35 +431,6 @@ card_images = {
 for card_name in CARD_NAMES:
     card_images[WHITE][card_name] = load_card_image(os.path.join("cards", f"{card_name}_white.png"))
     card_images[BLACK][card_name] = load_card_image(os.path.join("cards", f"{card_name}_black.png"))
-
-# Display name, fallback art color, one-line description (hover preview).
-CARD_INFO = {
-    "pawntastic": ("Pawntastic", (40, 90, 40), "A pawn may charge 1-4 squares forward."),
-    "bishock": ("Bishock", (80, 40, 100), "A bishop zaps every piece on its diagonals."),
-    "rookdemon": ("Rookdemon", (120, 40, 20), "A rook leaves a burning trail for 2 moves."),
-    "windknight": ("Windknight", (30, 90, 85), "A knight moves twice in one turn."),
-    "queentum": ("Queentum", (70, 35, 105), "The queen teleports to any legal square."),
-    "longlivetheking": ("LongLiveTheKing", (105, 80, 25), "The king escapes to a corner and spawns pawns."),
-    "switchero": ("Switchero", (40, 65, 130), "Swap ownership of every piece on the board."),
-    "prophecy": ("The Prophecy", (120, 95, 30), "All of your pawns become queens."),
-    "armageddon": ("Armageddon", (120, 45, 35), "3x3 blast destroys pieces and leaves fire."),
-    "thedramatic": ("TheDramatic", (95, 45, 95), "The marked piece kills whatever captures it."),
-    "capitalism": ("Capitalism", (45, 130, 65), "Pay 100 Ether: instant win."),
-    "plague": ("Plague", (65, 110, 45), "One random enemy piece dies each of your turns."),
-    "solo": ("Solo", (45, 45, 45), "Win instantly if only your king remains."),
-    "absoluteprotection": ("AbsProtection", (35, 95, 140), "Your pieces cannot be captured for one turn."),
-    "timetraveler": ("TimeTraveler", (40, 80, 140), "Rewind the board 3 turns."),
-    "extrablood": ("ExtraBlood", (120, 25, 25), "Passive: capture Ether is doubled."),
-    "chrisma": ("Chrisma", (135, 45, 115), "Convert enemy pieces around your king."),
-    "inzone": ("InZone", (150, 40, 35), "Chain up to 5 captures; the piece dies after."),
-    "nope": ("Nope", (60, 60, 110), "Cancel the opponent's last card; kills the checker if you are in check."),
-    "communism": ("Communism", (150, 30, 30), "Split all Ether evenly between both players."),
-    "gambit": ("Gambit", (110, 80, 30), "Sacrifice as many of your pieces as you want for double value each."),
-    "propaganda": ("Propaganda", (120, 60, 130), "Each of your turns: 50% to convert an enemy piece."),
-    "ifeelsafe": ("I Feel Safe", (40, 110, 120), "Passive: end of turn, +3 Ether per piece by your king."),
-    "iguess": ("I Guess", (90, 90, 100), "Permanently take 2 extra moves each turn."),
-    "gravitystorm": ("Gravity Storm", (50, 40, 80), "Every piece falls toward the chosen point until it hits a piece or wall."),
-}
 
 
 def initial_board():
@@ -718,7 +522,12 @@ _last_float_ticks = [0]
 
 
 def init_floating_cards():
-    card_w = int(SCREEN_HEIGHT * 0.13)
+    # Sized off screen height, but capped at the 1080p-equivalent pixel size:
+    # uncapped, the card area (and so the per-frame rotate/blit cost for all
+    # FLOATING_CARD_COUNT of them) grows quadratically with resolution, which
+    # is what made this decorative layer disproportionately expensive in
+    # fullscreen at 1440p/4K.
+    card_w = int(min(SCREEN_HEIGHT, 1080) * 0.13)
     card_h = int(card_w * CARD_ASPECT)
     names = [c for c in ALL_TRAY_CARDS if card_images[WHITE].get(c) is not None]
     if not names:
@@ -825,22 +634,50 @@ def draw_animations():
         if anim["kind"] == "move_line" and len(anim["squares"]) >= 2:
             start = board_center(*anim["squares"][0])
             end = board_center(*anim["squares"][1])
-            surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
             width = max(4, SQUARE_SIZE // 13)
-            pygame.draw.line(surface, (*color, alpha), start, end, width)
 
             # Travelling orb on the movement path.
             ox = int(start[0] + (end[0] - start[0]) * progress)
             oy = int(start[1] + (end[1] - start[1]) * progress)
-            pygame.draw.circle(surface, (*color, alpha), (ox, oy), max(6, SQUARE_SIZE // 9))
-            pygame.draw.circle(surface, (255, 255, 255, alpha), (ox, oy), max(3, SQUARE_SIZE // 18))
-            screen.blit(surface, (0, 0))
+            orb_r = max(6, SQUARE_SIZE // 9)
+
+            # Drawing is confined to a small strip around the move, so size
+            # the alpha surface to that strip instead of the whole screen -
+            # screen-sized per-pixel-alpha surfaces are expensive to
+            # allocate and blend, and this animation fires on every move.
+            pad = orb_r + width + 4
+            min_x = min(start[0], end[0], ox) - pad
+            min_y = min(start[1], end[1], oy) - pad
+            max_x = max(start[0], end[0], ox) + pad
+            max_y = max(start[1], end[1], oy) + pad
+            w, h = max(1, max_x - min_x), max(1, max_y - min_y)
+            surface = pygame.Surface((w, h), pygame.SRCALPHA)
+
+            def _tr(pt):
+                return (pt[0] - min_x, pt[1] - min_y)
+
+            pygame.draw.line(surface, (*color, alpha), _tr(start), _tr(end), width)
+            pygame.draw.circle(surface, (*color, alpha), _tr((ox, oy)), orb_r)
+            pygame.draw.circle(surface, (255, 255, 255, alpha), _tr((ox, oy)), max(3, SQUARE_SIZE // 18))
+            screen.blit(surface, (min_x, min_y))
 
         elif anim["kind"] in ["burst", "blast", "shield", "magic", "meteor", "coin", "poison"]:
-            surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            # Same idea as move_line: bound the surface to the squares this
+            # animation actually touches (plus generous padding for rays,
+            # rects and floating text) instead of allocating full-screen.
+            pad = int(SQUARE_SIZE * 2.5)
+            centers = [board_center(r, c) for r, c in anim["squares"]]
+            min_x = min(c[0] for c in centers) - pad
+            min_y = min(c[1] for c in centers) - pad
+            max_x = max(c[0] for c in centers) + pad
+            max_y = max(c[1] for c in centers) + pad
+            w, h = max(1, max_x - min_x), max(1, max_y - min_y)
+            surface = pygame.Surface((w, h), pygame.SRCALPHA)
 
             for row, col in anim["squares"]:
                 cx, cy = board_center(row, col)
+                cx -= min_x
+                cy -= min_y
                 radius = int(SQUARE_SIZE * (0.22 + progress * 0.95))
                 width = max(2, int(8 * (1 - progress)))
                 pygame.draw.circle(surface, (*color, alpha), (cx, cy), radius, width)
@@ -880,7 +717,7 @@ def draw_animations():
                     txt_rect = txt.get_rect(center=(cx, cy - int(progress * 38)))
                     surface.blit(txt, txt_rect)
 
-            screen.blit(surface, (0, 0))
+            screen.blit(surface, (min_x, min_y))
 
         elif anim["kind"] == "banner":
             surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
@@ -1184,6 +1021,28 @@ class GameState:
         self.bonus_turns = {WHITE: 0, BLACK: 0}
         self.pending_extra_moves = {WHITE: 0, BLACK: 0}
 
+        # Mirror Match: the last card name each color played, so it can be
+        # copied for free.
+        self.last_card_played = {WHITE: None, BLACK: None}
+
+        # Insurance passive: these colors get double Ether for the first
+        # piece they lose each turn (cleared in pass_turn).
+        self.insurance_active = set()
+        self.insurance_used = {WHITE: False, BLACK: False}
+
+        # Hydra passive: when one of these colors' pieces is captured, two
+        # pawns of that color spawn next to where it died.
+        self.hydra_active = set()
+
+        # Hot Potato: a square -> countdown (in plies, decremented in
+        # pass_turn) until the piece sitting there explodes.
+        self.hot_potato_bombs = {}
+
+        # Possession: possessed_by takes full control of possessed_turn's
+        # very next turn (cleared once that turn ends in pass_turn).
+        self.possessed_by = None
+        self.possessed_turn = None
+
         # A turn ends only when the player makes their chess move(s) AND presses
         # End Turn. moves_made_this_turn tracks how many chess moves were made.
         self.moves_made_this_turn = 0
@@ -1293,6 +1152,7 @@ class GameState:
         self.discard[self.turn].append(card_name)
         self.discard_marks.discard(card_name)
         self.log_event(self.turn, "card", display)
+        self.last_card_played[self.turn] = card_name
         if from_center is not None:
             spawn_discard_fly(from_center, self.turn, card_name)
         return True
@@ -1465,6 +1325,33 @@ class GameState:
                 if king is not None:
                     add_animation("coin", squares=[king], text=f"+{bonus}", color=(120, 230, 255), frames=32)
 
+        # Possession ends the instant the possessed player's turn is over.
+        if self.turn == self.possessed_turn:
+            self.possessed_by = None
+            self.possessed_turn = None
+
+        # Hot Potato: every armed bomb ticks down once per ply; anything
+        # reaching zero explodes (if the bombed piece is still there).
+        for square in list(self.hot_potato_bombs.keys()):
+            self.hot_potato_bombs[square] -= 1
+            if self.hot_potato_bombs[square] <= 0:
+                del self.hot_potato_bombs[square]
+                row, col = square
+                piece = self.board[row][col]
+                if piece is not None and piece.lower() != "k":
+                    self.board[row][col] = None
+                    self.rookdemon_rooks.pop(square, None)
+                    self.dramatic_pieces.discard(square)
+                    if self.windknight_square == square:
+                        self.windknight_square = None
+                        self.windknight_moves_remaining = 0
+                    if self.inzone_square == square:
+                        self.inzone_square = None
+                    add_animation("blast", squares=[square], text="BOOM", color=(255, 140, 30), frames=38)
+
+        # Insurance: a fresh "first loss" credit is available each turn.
+        self.insurance_used = {WHITE: False, BLACK: False}
+
         self.turn = self.enemy_color(self.turn)
         self.moves_made_this_turn = 0
         self.ability_used_this_turn = False
@@ -1631,11 +1518,17 @@ class GameState:
             "fire_tiles": copy.deepcopy(self.fire_tiles),
             "rookdemon_rooks": copy.deepcopy(self.rookdemon_rooks),
             "dramatic_pieces": copy.deepcopy(self.dramatic_pieces),
+            "hot_potato_bombs": copy.deepcopy(self.hot_potato_bombs),
             "plague_active": copy.deepcopy(self.plague_active),
             "absolute_protection_active": copy.deepcopy(self.absolute_protection_active),
             "extra_blood_active": copy.deepcopy(self.extra_blood_active),
             "propaganda_active": copy.deepcopy(self.propaganda_active),
             "ifeelsafe_active": copy.deepcopy(self.ifeelsafe_active),
+            "insurance_active": copy.deepcopy(self.insurance_active),
+            "hydra_active": copy.deepcopy(self.hydra_active),
+            "last_card_played": copy.deepcopy(self.last_card_played),
+            "possessed_by": self.possessed_by,
+            "possessed_turn": self.possessed_turn,
             "bonus_turns": copy.deepcopy(self.bonus_turns),
             "deck": copy.deepcopy(self.deck),
             "hand": copy.deepcopy(self.hand),
@@ -1663,6 +1556,7 @@ class GameState:
         self.board = copy.deepcopy(snapshot["board"])
         self.rookdemon_rooks = copy.deepcopy(snapshot["rookdemon_rooks"])
         self.dramatic_pieces = copy.deepcopy(snapshot["dramatic_pieces"])
+        self.hot_potato_bombs = copy.deepcopy(snapshot.get("hot_potato_bombs", {}))
         self.white_king_moved = snapshot["white_king_moved"]
         self.black_king_moved = snapshot["black_king_moved"]
         self.white_left_rook_moved = snapshot["white_left_rook_moved"]
@@ -1680,6 +1574,11 @@ class GameState:
             self.extra_blood_active = copy.deepcopy(snapshot["extra_blood_active"])
             self.propaganda_active = copy.deepcopy(snapshot["propaganda_active"])
             self.ifeelsafe_active = copy.deepcopy(snapshot["ifeelsafe_active"])
+            self.insurance_active = copy.deepcopy(snapshot.get("insurance_active", set()))
+            self.hydra_active = copy.deepcopy(snapshot.get("hydra_active", set()))
+            self.last_card_played = copy.deepcopy(snapshot.get("last_card_played", {WHITE: None, BLACK: None}))
+            self.possessed_by = snapshot.get("possessed_by")
+            self.possessed_turn = snapshot.get("possessed_turn")
             self.bonus_turns = copy.deepcopy(snapshot["bonus_turns"])
             self.deck = copy.deepcopy(snapshot["deck"])
             self.hand = copy.deepcopy(snapshot["hand"])
@@ -2216,6 +2115,7 @@ class GameState:
             self.board[row][col] = None
             self.rookdemon_rooks.pop((row, col), None)
             self.dramatic_pieces.discard((row, col))
+            self.hot_potato_bombs.pop((row, col), None)
             if self.windknight_square == (row, col):
                 self.windknight_square = None
                 self.windknight_moves_remaining = 0
@@ -2265,6 +2165,8 @@ class GameState:
             if (fr, fc) in self.dramatic_pieces:
                 self.dramatic_pieces.discard((fr, fc))
                 self.dramatic_pieces.add((cr, cc))
+            if (fr, fc) in self.hot_potato_bombs:
+                self.hot_potato_bombs[(cr, cc)] = self.hot_potato_bombs.pop((fr, fc))
             if self.windknight_square == (fr, fc):
                 self.windknight_square = (cr, cc)
             if self.inzone_square == (fr, fc):
@@ -2691,6 +2593,245 @@ class GameState:
             "{player} played I Guess. They now take 2 extra moves every turn."
         )
 
+    def _slide_one_rank(self, color, row_order):
+        # Shared by Earthquake for both colors: each non-king piece of `color`
+        # slides one rank toward its own back row, processed closest-to-home
+        # first so a column shifts like a single chain reaction. Whatever
+        # piece is sitting in the way is crushed (kings block but never die).
+        back_dr = 1 if color == WHITE else -1
+        destroyed = 0
+        moved = 0
+
+        for col in range(8):
+            for row in row_order:
+                piece = self.board[row][col]
+                if piece is None or piece.lower() == "k" or self.piece_color(piece) != color:
+                    continue
+
+                target_row = row + back_dr
+                blocker = self.board[target_row][col]
+
+                if blocker is not None and blocker.lower() == "k":
+                    continue
+
+                if blocker is not None:
+                    self.rookdemon_rooks.pop((target_row, col), None)
+                    self.dramatic_pieces.discard((target_row, col))
+                    self.hot_potato_bombs.pop((target_row, col), None)
+                    destroyed += 1
+                    add_animation("burst", squares=[(target_row, col)], text="QUAKE", color=(150, 110, 60), frames=30)
+
+                self.board[target_row][col] = piece
+                self.board[row][col] = None
+
+                if (row, col) in self.rookdemon_rooks:
+                    self.rookdemon_rooks[(target_row, col)] = self.rookdemon_rooks.pop((row, col))
+                if (row, col) in self.dramatic_pieces:
+                    self.dramatic_pieces.discard((row, col))
+                    self.dramatic_pieces.add((target_row, col))
+                if (row, col) in self.hot_potato_bombs:
+                    self.hot_potato_bombs[(target_row, col)] = self.hot_potato_bombs.pop((row, col))
+                if self.windknight_square == (row, col):
+                    self.windknight_square = (target_row, col)
+                if self.inzone_square == (row, col):
+                    self.inzone_square = (target_row, col)
+
+                add_animation("slide", frames=30, extra={"piece": piece, "from": (row, col), "to": (target_row, col)})
+                moved += 1
+
+        return moved, destroyed
+
+    def activate_earthquake(self):
+        if self.game_over:
+            return
+
+        if not self.spend_card("earthquake"):
+            return
+
+        # White's back row is 7 (closest pieces move first, descending);
+        # Black's back row is 0 (closest pieces move first, ascending).
+        white_moved, white_destroyed = self._slide_one_rank(WHITE, range(6, -1, -1))
+        black_moved, black_destroyed = self._slide_one_rank(BLACK, range(1, 8))
+
+        moved = white_moved + black_moved
+        destroyed = white_destroyed + black_destroyed
+        self.finish_card(
+            f"{{player}} triggered an Earthquake. {moved} piece(s) slid back, {destroyed} crushed."
+        )
+
+    def activate_mirrormatch(self):
+        if self.game_over:
+            return
+
+        opp = self.enemy_color(self.turn)
+        last = self.last_card_played.get(opp)
+
+        if last is None or last not in INSTANT_CARDS:
+            # Target cards need a square to copy onto, which Mirror Match
+            # doesn't have, so only instant cards can be mirrored.
+            self.status_message = "Mirror Match has nothing to copy."
+            return
+
+        if not self.spend_card("mirrormatch"):
+            return
+
+        # Borrow the copied card into hand just long enough for its own
+        # activate_<name> to run (most of them gate on spend_card), then
+        # refund exactly what that inner spend_card charged so the copy is
+        # free either way.
+        self.hand[self.turn].append(last)
+        getattr(self, f"activate_{last}")()
+        if last in self.hand[self.turn]:
+            # The copy fizzled before reaching spend_card (a precondition
+            # wasn't met) - nothing was charged, just drop the phantom card.
+            self.hand[self.turn].remove(last)
+        else:
+            self.add_ether(self.turn, CARD_COSTS.get(last, 0))
+
+        add_animation("banner", text="MIRROR MATCH", color=(150, 200, 255), frames=44)
+        display = CARD_INFO.get(last, (last,))[0]
+        self.finish_card(f"{{player}} used Mirror Match to copy {display} for free.")
+
+    def activate_insurance(self):
+        if self.game_over:
+            return
+
+        if self.turn in self.insurance_active:
+            self.status_message = "Insurance is already active for you."
+            return
+
+        if not self.spend_card("insurance"):
+            return
+
+        self.insurance_active.add(self.turn)
+        add_animation("banner", text="INSURANCE", color=(120, 230, 255), frames=46)
+        self.finish_card(
+            "{player} bought Insurance. The first piece lost each turn pays double its value."
+        )
+
+    def activate_shuffleup(self):
+        if self.game_over:
+            return
+
+        if not self.spend_card("shuffleup"):
+            return
+
+        squares = []
+        pieces = []
+        for r in range(8):
+            for c in range(8):
+                p = self.board[r][c]
+                if p is not None and p.lower() != "k":
+                    squares.append((r, c))
+                    pieces.append(p)
+                    self.rookdemon_rooks.pop((r, c), None)
+                    self.dramatic_pieces.discard((r, c))
+                    self.hot_potato_bombs.pop((r, c), None)
+
+        random.shuffle(pieces)
+        for (r, c), p in zip(squares, pieces):
+            self.board[r][c] = p
+
+        self.windknight_square = None
+        self.windknight_moves_remaining = 0
+        self.inzone_square = None
+
+        add_animation("magic", squares=squares, text="SHUFFLE", color=(200, 160, 255), frames=46)
+        self.finish_card(
+            f"{{player}} played Shuffle Up. {len(squares)} piece(s) were redealt."
+        )
+
+    def activate_possession(self):
+        if self.game_over:
+            return
+
+        if not self.spend_card("possession"):
+            return
+
+        self.possessed_by = self.turn
+        self.possessed_turn = self.enemy_color(self.turn)
+        add_animation("banner", text="POSSESSION", color=(180, 60, 200), frames=46)
+        self.finish_card(
+            "{player} took Possession. They control the opponent's next turn."
+        )
+
+    def activate_hotpotato(self):
+        if self.game_over:
+            return
+
+        enemy = self.enemy_color(self.turn)
+        targets = [
+            (r, c) for r in range(8) for c in range(8)
+            if self.board[r][c] is not None
+            and self.piece_color(self.board[r][c]) == enemy
+            and self.board[r][c].lower() != "k"
+        ]
+
+        if not targets:
+            self.status_message = "Hot Potato has no enemy piece to target."
+            return
+
+        if not self.spend_card("hotpotato"):
+            return
+
+        row, col = random.choice(targets)
+        self.hot_potato_bombs[(row, col)] = 4  # 2 full turns (4 plies)
+        add_animation("magic", squares=[(row, col)], text="HOT POTATO", color=(255, 140, 30), frames=42)
+        self.finish_card(
+            "{player} played Hot Potato. A random enemy piece will explode in 2 turns."
+        )
+
+    def activate_pandorashand(self):
+        if self.game_over:
+            return
+
+        if not self.spend_card("pandorashand"):
+            return
+
+        n = len(self.hand[self.turn])
+        for card_name in list(self.hand[self.turn]):
+            self.discard[self.turn].append(card_name)
+        self.hand[self.turn] = []
+        self.draw_cards(self.turn, n)
+
+        # Auto-play one of the freshly drawn cards for free. Only instant
+        # cards are eligible - target cards need a square Pandora's Hand
+        # doesn't have.
+        choices = [c for c in self.hand[self.turn] if c in INSTANT_CARDS]
+        played = None
+        if choices:
+            played = random.choice(choices)
+            getattr(self, f"activate_{played}")()
+            if played not in self.hand[self.turn]:
+                # The auto-play succeeded and spend_card charged its cost -
+                # refund it so the play is free.
+                self.add_ether(self.turn, CARD_COSTS.get(played, 0))
+            # Otherwise activate_<played> bailed out before reaching
+            # spend_card (a precondition wasn't met): the card is still
+            # sitting in hand exactly as drawn - nothing to undo.
+
+        add_animation("banner", text="PANDORA'S HAND", color=(220, 180, 120), frames=46)
+        display = CARD_INFO.get(played, (played,))[0] if played else None
+        note = f"played {display} for free" if display else "drew a fresh hand"
+        self.finish_card(f"{{player}} opened Pandora's Hand and {note}.")
+
+    def activate_hydra(self):
+        if self.game_over:
+            return
+
+        if self.turn in self.hydra_active:
+            self.status_message = "Hydra is already active for you."
+            return
+
+        if not self.spend_card("hydra"):
+            return
+
+        self.hydra_active.add(self.turn)
+        add_animation("banner", text="HYDRA", color=(80, 200, 120), frames=46)
+        self.finish_card(
+            "{player} awakened Hydra. Losing a piece this turn spawns two pawns where it died."
+        )
+
     # -----------------------------
     # Move generation
     # -----------------------------
@@ -3014,6 +3155,11 @@ class GameState:
         piece_type = piece.lower()
         move_distance = self.get_move_distance(piece, original_from_square, original_to_square)
         capture_ether = self.get_piece_value(captured_piece)
+        # Tracks whoever actually dies this move (the en passant branch below
+        # may redirect this to the captured pawn's own square) - used by
+        # Hydra/Insurance, which care about the piece lost, not the mover.
+        victim_piece = captured_piece
+        victim_square = (to_row, to_col)
         captured_square_was_dramatic = (
             captured_piece is not None
             and (to_row, to_col) in self.dramatic_pieces
@@ -3065,6 +3211,8 @@ class GameState:
             capture_col = to_col
             en_passant_piece = self.board[capture_row][capture_col]
             capture_ether += self.get_piece_value(en_passant_piece)
+            victim_piece = en_passant_piece
+            victim_square = (capture_row, capture_col)
 
             if (capture_row, capture_col) in self.dramatic_pieces:
                 captured_square_was_dramatic = True
@@ -3086,10 +3234,16 @@ class GameState:
         if captured_piece is not None:
             self.dramatic_pieces.discard((to_row, to_col))
             self.rookdemon_rooks.pop((to_row, to_col), None)
+            self.hot_potato_bombs.pop((to_row, to_col), None)
 
             if self.windknight_square == (to_row, to_col):
                 self.windknight_square = None
                 self.windknight_moves_remaining = 0
+
+        # Hot Potato follows the piece it's armed to, even when it moves
+        # without capturing.
+        if (from_row, from_col) in self.hot_potato_bombs:
+            self.hot_potato_bombs[(to_row, to_col)] = self.hot_potato_bombs.pop((from_row, from_col))
 
         if piece_type == "r" and original_from_square in self.rookdemon_rooks:
             fire_path = get_rookdemon_path(original_from_square, original_to_square)
@@ -3147,6 +3301,31 @@ class GameState:
 
             if capture_ether > 0 and color in self.extra_blood_active:
                 capture_ether *= 2
+
+            if victim_piece is not None:
+                victim_color = self.piece_color(victim_piece)
+
+                if victim_color in self.insurance_active and not self.insurance_used[victim_color]:
+                    self.insurance_used[victim_color] = True
+                    payout = self.get_piece_value(victim_piece) * 2
+                    self.add_ether(victim_color, payout)
+                    add_animation("coin", squares=[victim_square], text=f"+{payout}", color=(120, 230, 255), frames=32)
+
+                if victim_color in self.hydra_active:
+                    spots = [
+                        (victim_square[0] + dr, victim_square[1] + dc)
+                        for dr in (-1, 0, 1) for dc in (-1, 0, 1)
+                        if not (dr == 0 and dc == 0)
+                    ]
+                    spots = [s for s in spots if self.in_bounds(*s) and self.is_empty(*s)]
+                    random.shuffle(spots)
+                    spawn_piece = "P" if victim_color == WHITE else "p"
+                    spawned = []
+                    for r, c in spots[:2]:
+                        self.board[r][c] = spawn_piece
+                        spawned.append((r, c))
+                    if spawned:
+                        add_animation("magic", squares=spawned, text="HYDRA", color=(80, 200, 120), frames=40)
 
             move_ether = move_distance
             total_ether_gained = move_ether + capture_ether
@@ -3919,7 +4098,7 @@ def draw_wait_banner():
     msg = None
     if game.game_over:
         return
-    if game_mode == "pvc" and game.turn == ai_color():
+    if game_mode == "pvc" and game.turn == ai_color() and game.possessed_turn != ai_color():
         msg = "COMPUTER IS THINKING..."
     elif game_mode == "online" and net is not None and net.connected and game.turn != net_local_color:
         msg = "OPPONENT'S TURN..."
@@ -4165,8 +4344,11 @@ def draw_move_log():
     btns = get_action_buttons()
     # Narrow panel hugging the right edge, aligned above the End Turn button.
     right = SCREEN_WIDTH - SIDE_MARGIN
-    #left = max(BOARD_X + BOARD_W + 50, btns["end_turn"].left)
-    left = 1600
+    # The board's width (and so its right edge) scales with screen size, so
+    # the log's left edge must too - a fixed pixel value here only worked at
+    # the resolution it was tuned for; at higher resolutions the board is
+    # wider and sits further right, so a fixed left edge cuts into it.
+    left = max(BOARD_X + BOARD_W + 50, btns["end_turn"].left)
     top = INFO_HEIGHT + 14
     bottom = btns["end_turn"].top - 14
     if right - left < 120 or bottom - top < 90:
@@ -4478,59 +4660,23 @@ def draw_back_hint():
     draw_shadow_text(small_font, "ESC  BACK", MENU_MUTED, (40, SCREEN_HEIGHT - 44))
 
 
-def spaced_word_width(font_obj, text, spacing):
-    return sum(font_obj.size(ch)[0] for ch in text) + spacing * (len(text) - 1)
-
-
-def draw_spaced_word(font_obj, text, color, x, y, spacing):
-    # Render letter-spaced text starting at x; returns the width used.
-    start = x
-    for ch in text:
-        g = font_obj.render(ch, True, color)
-        screen.blit(g, (x, y))
-        x += g.get_width() + spacing
-    return x - spacing - start
-
-
-def draw_tagline(font_obj, words, color, center_x, y, letter_spacing=5, sep_gap=30):
-    # Letter-spaced words separated by small diamond markers (the pixel font has
-    # no middle-dot glyph, so the separators are drawn by hand).
-    widths = [spaced_word_width(font_obj, w, letter_spacing) for w in words]
-    total = sum(widths) + sep_gap * (len(words) - 1)
-    x = center_x - total // 2
-    cy = y + font_obj.get_height() // 2
-    for i, w in enumerate(words):
-        draw_spaced_word(font_obj, w, color, x, y, letter_spacing)
-        x += widths[i]
-        if i < len(words) - 1:
-            dcx = x + sep_gap // 2
-            pygame.draw.polygon(screen, color, [
-                (dcx, cy - 4), (dcx + 4, cy), (dcx, cy + 4), (dcx - 4, cy)])
-            x += sep_gap
-
-
 def draw_start_screen():
     draw_menu_background()
 
     # Title: CHESS (white) + BYTE (gold), with a soft outline so it reads on the
     # busy galaxy background.
     chess = home_title_font.render("CHESS", True, MENU_WHITE)
-    byte = home_title_font.render("BYTE", True, MENU_GOLD)
+    byte = home_title_font.render(" HALLUCINATION", True, MENU_GOLD)
     total_w = chess.get_width() + byte.get_width()
     tx = (SCREEN_WIDTH - total_w) // 2
     ty = int(SCREEN_HEIGHT * 0.04)
-    outline = home_title_font.render("CHESSBYTE", True, (0, 0, 0))
+    outline = home_title_font.render("CHESS Hul", True, (0, 0, 0))
     for ox, oy in ((-3, 0), (3, 0), (0, -3), (0, 3), (-3, -3), (3, 3), (3, -3), (-3, 3)):
         ghost = outline.copy()
         ghost.set_alpha(150)
         screen.blit(ghost, (tx + ox, ty + oy))
     screen.blit(chess, (tx, ty))
     screen.blit(byte, (tx + chess.get_width(), ty))
-
-    # Subtitle: spaced caps tagline under the logo.
-    sy = ty + chess.get_height() - 6
-    #draw_tagline(subtitle_font, ["DEAL", "DEPLOY", "CHECKMATE"],
-    #             MENU_WHITE, SCREEN_WIDTH // 2, sy)
 
     # Menu buttons: flat rounded bars with a left-aligned label. The selected
     # one is a filled gold bar with dark text and a glow; the rest are dark glass.
@@ -5088,7 +5234,8 @@ def _apply_ai_move(move):
 def ai_update():
     # Drive the computer's colour with the engine in PvC. Non-blocking: the
     # search runs on a worker thread, applied on the main thread when ready.
-    if game_mode != "pvc" or game.game_over or game.turn != ai_color() or game.active_card is not None:
+    if (game_mode != "pvc" or game.game_over or game.turn != ai_color()
+            or game.active_card is not None or game.possessed_turn == ai_color()):
         _ai["earliest"] = 0
         return
 
@@ -5309,107 +5456,36 @@ def handle_lobby_events(events):
 
 
 # -----------------------------
-# Saved settings + saved game (on disk)
-# -----------------------------
-import json
+import persistence
 
-CONFIG_PATH = os.path.join(_BASE_DIR, "config.json")
-SAVE_PATH = os.path.join(_BASE_DIR, "savegame.pkl")
+# main.py is the entry script (run as __main__), so persistence.py can't
+# `import main` without re-executing this whole file as a second module -
+# instead pass this already-running module into each call.
+_this_module = sys.modules[__name__]
 
 
 def save_config():
-    data = {
-        "music_muted": music_muted,
-        "white_skin_index": white_skin_index,
-        "black_skin_index": black_skin_index,
-        "board_index": current_board_index,
-        "difficulty": difficulty,
-        "human_color": human_color,
-        # Store the *disabled* cards so cards added in future updates default on.
-        "disabled_cards": [c for c in ALL_TRAY_CARDS if c not in enabled_cards],
-    }
-    try:
-        with open(CONFIG_PATH, "w") as f:
-            json.dump(data, f, indent=2)
-    except Exception as exc:
-        print("save_config failed:", exc)
+    persistence.save_config(_this_module)
 
 
 def load_config():
-    global music_muted, white_skin_index, black_skin_index, current_board_index
-    global difficulty, human_color
-    global BOARD_IMAGE, BOARD_IMAGE_OX, BOARD_IMAGE_OY, LIGHT_SQUARE, DARK_SQUARE
-    try:
-        with open(CONFIG_PATH) as f:
-            data = json.load(f)
-    except Exception:
-        return  # no config yet, or unreadable - keep defaults
-
-    music_muted = bool(data.get("music_muted", music_muted))
-    white_skin_index = int(data.get("white_skin_index", white_skin_index)) % len(PIECE_SKINS)
-    black_skin_index = int(data.get("black_skin_index", black_skin_index)) % len(PIECE_SKINS)
-    if data.get("difficulty") in DIFFICULTY_SETTINGS:
-        difficulty = data["difficulty"]
-    if data.get("human_color") in (WHITE, BLACK):
-        human_color = data["human_color"]
-
-    disabled = set(data.get("disabled_cards", []))
-    enabled_cards.clear()
-    enabled_cards.update(c for c in ALL_TRAY_CARDS if c not in disabled)
-
-    bi = int(data.get("board_index", current_board_index))
-    if 0 <= bi < len(BOARD_FILES):
-        current_board_index = bi
-        BOARD_IMAGE, BOARD_IMAGE_OX, BOARD_IMAGE_OY, LIGHT_SQUARE, DARK_SQUARE = (
-            load_pixel_board(BOARD_FILES[bi]))
-
-    if music_muted and _audio_ok:
-        pygame.mixer.music.set_volume(0.0)
+    persistence.load_config(_this_module)
 
 
 def has_save():
-    return os.path.exists(SAVE_PATH)
+    return persistence.has_save(_this_module)
 
 
 def save_game():
-    # Auto-saved during local play so a game can be resumed from the menu.
-    if game_mode not in ("pvp", "pvc") or game.game_over:
-        return
-    try:
-        with open(SAVE_PATH, "wb") as f:
-            pickle.dump({"mode": game_mode, "human_color": human_color,
-                         "dict": game.__dict__}, f)
-    except Exception as exc:
-        print("save_game failed:", exc)
+    persistence.save_game(_this_module)
 
 
 def delete_save():
-    try:
-        if os.path.exists(SAVE_PATH):
-            os.remove(SAVE_PATH)
-    except Exception:
-        pass
+    persistence.delete_save(_this_module)
 
 
 def load_game():
-    global game_mode, human_color, dragging_card, dragging_piece
-    try:
-        with open(SAVE_PATH, "rb") as f:
-            data = pickle.load(f)
-    except Exception as exc:
-        print("load_game failed:", exc)
-        return False
-    game_mode = data.get("mode", "pvp")
-    human_color = data.get("human_color", WHITE)
-    game.__dict__.update(data["dict"])
-    animations.clear()
-    dragging_card = None
-    dragging_piece = None
-    ai_reset()
-    if game_mode == "pvc":
-        ensure_engine()
-        configure_engine()
-    return True
+    return persistence.load_game(_this_module)
 
 
 # -----------------------------
@@ -5470,7 +5546,10 @@ while running:
 
     # Ignore human board/card input when it isn't this player's turn: the
     # computer's move in PvC, or the opponent's turn online. ESC still works.
-    ai_to_move = (game_mode == "pvc" and game.turn == ai_color() and not game.game_over)
+    ai_to_move = (
+        game_mode == "pvc" and game.turn == ai_color() and not game.game_over
+        and game.possessed_turn != ai_color()
+    )
     online_not_my_turn = (
         game_mode == "online" and net is not None
         and (not net.connected or game.turn != net_local_color)
