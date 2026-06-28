@@ -11,6 +11,8 @@ source.exclude_dirs = godot,.venv,__pycache__,.git,tests
 
 version = 1.5
 
+icon.filename = %(source.dir)s/icon.png
+
 # Cards/pieces/board/fonts/music - everything main.py loads at runtime.
 # python-for-android bundles whatever matches source.include_exts under
 # source.dir, so assets/ and cards/ are picked up automatically.
