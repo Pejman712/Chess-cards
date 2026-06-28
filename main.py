@@ -1,8 +1,71 @@
 import pygame
 import sys
+import os
+import traceback
+
+# ------------------------------------------------------------------ #
+# Boot pygame and open the display FIRST so the crash handler can     #
+# always draw to the screen regardless of where a crash occurs.       #
+# ------------------------------------------------------------------ #
+pygame.init()
+
+if os.environ.get("CHESS_WINDOW"):
+    _win_w, _win_h = (int(v) for v in os.environ["CHESS_WINDOW"].lower().split("x"))
+    display = pygame.display.set_mode((_win_w, _win_h))
+else:
+    display = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+pygame.display.set_caption("Chess Power-Up Cards")
+SCREEN_WIDTH, SCREEN_HEIGHT = display.get_size()
+
+
+def _show_crash(exc_type, exc_val, exc_tb):
+    msg = "".join(traceback.format_exception(exc_type, exc_val, exc_tb))
+    _save_dir = os.environ.get("ANDROID_PRIVATE", "/tmp")
+    _save_path = os.path.join(_save_dir, "chesscards_crash.txt")
+    # Also include any Java-level crash written before Python started.
+    _java_crash = os.path.join(_save_dir, "java_crash.txt")
+    if os.path.exists(_java_crash):
+        try:
+            with open(_java_crash) as _jf:
+                msg = "JAVA CRASH:\n" + _jf.read() + "\n\nPYTHON:\n" + msg
+        except Exception:
+            pass
+    try:
+        with open(_save_path, "w") as _f:
+            _f.write(msg)
+    except Exception:
+        _save_path = "(could not save)"
+    # Draw the traceback on the screen — screenshot it to share.
+    try:
+        surf = pygame.display.get_surface() or pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+        w, h = surf.get_size()
+        surf.fill((10, 0, 0))
+        font = pygame.font.SysFont("monospace", max(14, h // 50))
+        lh = font.get_linesize()
+        y = 10
+        header = f"CRASH — log saved to: {_save_path}"
+        surf.blit(font.render(header, True, (255, 220, 60)), (10, y))
+        y += lh * 2
+        for raw_line in msg.split("\n"):
+            for chunk in [raw_line[i:i+80] for i in range(0, max(1, len(raw_line)), 80)] or [""]:
+                if y + lh > h:
+                    break
+                surf.blit(font.render(chunk, True, (255, 80, 80)), (10, y))
+                y += lh
+        pygame.display.flip()
+        done = False
+        while not done:
+            for ev in pygame.event.get():
+                if ev.type in (pygame.QUIT, pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
+                    done = True
+    except Exception:
+        pass
+
+
+sys.excepthook = _show_crash
+
 import copy
 import math
-import os
 import random
 
 from cards.pawntastic import get_pawntastic_moves
@@ -11,8 +74,6 @@ from cards.rookdemon import get_rookdemon_path
 from cards.windknight import is_valid_windknight_target
 from cards.queentum import get_queentum_moves
 from cards.longlivetheking import get_empty_escape_corners
-
-pygame.init()
 
 # Audio is optional: a machine without a sound device (or a headless test
 # run) should still launch the game, just silently.
@@ -27,7 +88,7 @@ def start_music():
     if not _audio_ok:
         return
     try:
-        pygame.mixer.music.load(os.path.join("assets", "music.mp3"))
+        pygame.mixer.music.load(os.path.join(ASSET_DIR, "music.mp3"))
         pygame.mixer.music.set_volume(0.5)
         pygame.mixer.music.play(-1)  # loop forever
     except pygame.error:
@@ -40,76 +101,130 @@ def start_music():
 ROWS = 8
 COLS = 8
 
-# Fullscreen. Press ESC to quit.
-# Set CHESS_WINDOW=1280x800 to run windowed instead (useful for testing).
-if os.environ.get("CHESS_WINDOW"):
-    win_w, win_h = (int(v) for v in os.environ["CHESS_WINDOW"].lower().split("x"))
-    display = pygame.display.set_mode((win_w, win_h))
-else:
-    display = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
-pygame.display.set_caption("Chess Power-Up Cards")
-SCREEN_WIDTH, SCREEN_HEIGHT = display.get_size()
+# Scale all fixed-pixel constants relative to an 800-px reference using the
+# SHORT edge, so landscape (2400×1080) and portrait (1080×2400) both give
+# UI_SCALE = 1.35 on the same physical device.
+CARD_ASPECT = 230 / 183  # card art height / width
+
+IS_PORTRAIT = SCREEN_HEIGHT > SCREEN_WIDTH
+
+# Sentinel globals replaced by _init_layout(); listed here so module-level
+# references resolve without NameError before _init_layout() runs.
+UI_SCALE = SIDE_MARGIN = BOARD_MARGIN = PANEL_PAD = HEADER_H = CARD_GAP = 0
+INFO_HEIGHT = INFO_Y = ACTION_BTN_W = ARC_LIFT = 0
+HAND_RESERVE = TRAY_HEIGHT = TRAY_Y = TRAY_COLS = TRAY_ROWS = 0
+CARD_HEIGHT = CARD_WIDTH = 0
+LOG_STRIP_H = LOG_STRIP_Y = BTN_STRIP_Y = CARD_GRID_TOP = 0
+BOARD_AREA_WIDTH = BOARD_AREA_TOP = BOARD_AREA_HEIGHT = 0
+BOARD_SCALE = SQUARE_W = SQUARE_H = SQUARE_SIZE = 0
+PIECE_HEADROOM = BOARD_W = BOARD_H = BOARD_X = BOARD_Y = BOARD_LIFT = 0
+WIDTH = HEIGHT = 0
+
+
+def _sc(n):
+    return int(n * UI_SCALE)
+
+
+def _init_layout():
+    """Recompute all layout globals from the current SCREEN_WIDTH / SCREEN_HEIGHT."""
+    global UI_SCALE, SIDE_MARGIN, BOARD_MARGIN, PANEL_PAD, HEADER_H, CARD_GAP
+    global INFO_HEIGHT, INFO_Y, ACTION_BTN_W, ARC_LIFT
+    global HAND_RESERVE, TRAY_HEIGHT, TRAY_Y, TRAY_COLS, TRAY_ROWS
+    global CARD_HEIGHT, CARD_WIDTH
+    global LOG_STRIP_H, LOG_STRIP_Y, BTN_STRIP_Y, CARD_GRID_TOP
+    global BOARD_AREA_WIDTH, BOARD_AREA_TOP, BOARD_AREA_HEIGHT
+    global BOARD_SCALE, SQUARE_W, SQUARE_H, SQUARE_SIZE
+    global PIECE_HEADROOM, BOARD_W, BOARD_H, BOARD_X, BOARD_Y, BOARD_LIFT
+    global WIDTH, HEIGHT, IS_PORTRAIT
+
+    IS_PORTRAIT = SCREEN_HEIGHT > SCREEN_WIDTH
+    _REF = 800
+    UI_SCALE = min(SCREEN_WIDTH, SCREEN_HEIGHT) / _REF
+
+    def sc(n): return int(n * UI_SCALE)
+
+    SIDE_MARGIN   = sc(16)
+    BOARD_MARGIN  = sc(6)
+    PANEL_PAD     = sc(12)
+    HEADER_H      = sc(30)
+    CARD_GAP      = sc(10)
+    INFO_HEIGHT   = sc(92)
+    INFO_Y        = 0
+
+    if IS_PORTRAIT:
+        # Two-row card grid; log strip + button strip sit between board and cards.
+        # Card height scales off screen width (the short dimension) so cards are
+        # the same physical size regardless of how tall the phone is.
+        CARD_HEIGHT  = int(SCREEN_WIDTH * 0.30)
+        CARD_WIDTH   = int(CARD_HEIGHT / CARD_ASPECT)
+        TRAY_COLS    = max(1, (SCREEN_WIDTH - 2 * SIDE_MARGIN) // (CARD_WIDTH + PANEL_PAD))
+        TRAY_ROWS    = 2
+        BTN_H        = sc(80)
+        LOG_STRIP_H  = sc(100)
+        ACTION_BTN_W = int((SCREEN_WIDTH - 2 * SIDE_MARGIN - PANEL_PAD) // 2)
+        ARC_LIFT     = 0
+        card_grid_h  = CARD_HEIGHT * TRAY_ROWS + PANEL_PAD
+        # TRAY_Y marks the top of everything below the board (log + btns + cards)
+        HAND_RESERVE = card_grid_h + BTN_H + LOG_STRIP_H + PANEL_PAD * 5
+        TRAY_Y       = SCREEN_HEIGHT - HAND_RESERVE
+        LOG_STRIP_Y  = TRAY_Y + PANEL_PAD
+        BTN_STRIP_Y  = LOG_STRIP_Y + LOG_STRIP_H + PANEL_PAD
+        CARD_GRID_TOP = BTN_STRIP_Y + BTN_H + PANEL_PAD
+        BOARD_SCALE  = 0.95
+    else:
+        # Landscape: single arc row of cards; log floats to the right of board.
+        CARD_HEIGHT  = int(SCREEN_HEIGHT * 0.235)
+        CARD_WIDTH   = int(CARD_HEIGHT / CARD_ASPECT)
+        TRAY_COLS    = max(1, (SCREEN_WIDTH - 2 * SIDE_MARGIN) // (CARD_WIDTH + PANEL_PAD))
+        TRAY_ROWS    = 1
+        BTN_H        = sc(80)
+        LOG_STRIP_H  = 0
+        LOG_STRIP_Y  = 0
+        ACTION_BTN_W = sc(210)
+        ARC_LIFT     = int(CARD_HEIGHT * 0.10)
+        HAND_RESERVE = int(SCREEN_HEIGHT * 0.225)
+        TRAY_Y       = SCREEN_HEIGHT - HAND_RESERVE
+        BTN_STRIP_Y  = 0
+        CARD_GRID_TOP = TRAY_Y
+        BOARD_SCALE  = 0.84
+
+    TRAY_HEIGHT      = HAND_RESERVE
+    BOARD_AREA_WIDTH = SCREEN_WIDTH - 2 * SIDE_MARGIN
+    BOARD_AREA_TOP   = INFO_HEIGHT + BOARD_MARGIN
+    BOARD_AREA_HEIGHT = (TRAY_Y - BOARD_MARGIN) - BOARD_AREA_TOP
+
+    SQUARE_W = min(BOARD_AREA_WIDTH // COLS, int(BOARD_AREA_HEIGHT / 7.25))
+    SQUARE_W = int(SQUARE_W * BOARD_SCALE)
+    SQUARE_W -= SQUARE_W % 4
+    SQUARE_H     = SQUARE_W * 3 // 4
+    SQUARE_SIZE  = SQUARE_W
+    PIECE_HEADROOM = SQUARE_W * 2 - SQUARE_H
+    BOARD_W = SQUARE_W * COLS
+    BOARD_H = SQUARE_H * ROWS
+    BOARD_X = SIDE_MARGIN + max(0, (BOARD_AREA_WIDTH - BOARD_W) // 2)
+    BOARD_LIFT = sc(80) if not IS_PORTRAIT else 0
+    BOARD_Y = BOARD_AREA_TOP + PIECE_HEADROOM + max(
+        0, (BOARD_AREA_HEIGHT - PIECE_HEADROOM - BOARD_H) // 2
+    ) - BOARD_LIFT
+
+    WIDTH  = SCREEN_WIDTH
+    HEIGHT = SCREEN_HEIGHT
+
+
+_init_layout()
 
 # The whole game is drawn to this offscreen surface, then blitted to the real
 # window each frame - optionally with a shake offset (see the main loop).
 screen = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
 clock = pygame.time.Clock()
 
-# Layout (top to bottom): info bar at the very top, the board in the middle,
-# and the player's hand fanned in an arc across the bottom.
-SIDE_MARGIN = 16
-BOARD_MARGIN = 6  # tight vertical gap so the board can take more space
-PANEL_PAD = 12
-HEADER_H = 30
-CARD_GAP = 10
-INFO_HEIGHT = 92  # taller bar to fit the larger fonts
-CARD_ASPECT = 230 / 183  # card art aspect (height / width)
-
-# The board only reserves HAND_RESERVE at the bottom for the hand. The actual
-# cards are larger than that and are anchored to the screen bottom, so they
-# fan up and overlap the board's lower edge a little.
-HAND_RESERVE = int(SCREEN_HEIGHT * 0.225)
-TRAY_HEIGHT = HAND_RESERVE
-TRAY_Y = SCREEN_HEIGHT - HAND_RESERVE
-
-CARD_HEIGHT = int(SCREEN_HEIGHT * 0.235)
-CARD_WIDTH = int(CARD_HEIGHT / CARD_ASPECT)
-TRAY_COLS = max(1, (SCREEN_WIDTH - 2 * SIDE_MARGIN) // (CARD_WIDTH + PANEL_PAD))
-ARC_LIFT = int(CARD_HEIGHT * 0.10)  # how high the middle of the fan rises
-ACTION_BTN_W = 210  # End Turn / Discard buttons flanking the hand
-
-# Info bar pinned to the very top; the board fills the space between them.
-INFO_Y = 0
-BOARD_AREA_WIDTH = SCREEN_WIDTH - 2 * SIDE_MARGIN
-BOARD_AREA_TOP = INFO_HEIGHT + BOARD_MARGIN
-BOARD_AREA_HEIGHT = (TRAY_Y - BOARD_MARGIN) - BOARD_AREA_TOP
-
-# The perspective board has 16x12px squares (4 wide : 3 tall on screen). The
-# vertical budget per square width is 8 rows * 0.75 = 6, plus 1.25 headroom for
-# the back-rank sprites. The board's bottom lip is allowed to tuck behind the
-# hand cards, so it is not reserved here.
-# BOARD_SCALE shrinks the board below the space it could fill, leaving more
-# room around it (which the dimmed backdrop and larger hand cards fill).
-BOARD_SCALE = 0.84
-SQUARE_W = min(BOARD_AREA_WIDTH // COLS, int(BOARD_AREA_HEIGHT / 7.25))
-SQUARE_W = int(SQUARE_W * BOARD_SCALE)
-SQUARE_W -= SQUARE_W % 4
-SQUARE_H = SQUARE_W * 3 // 4
-SQUARE_SIZE = SQUARE_W  # piece sprites and effect sizes scale off the square width
-
-BOARD_W = SQUARE_W * COLS
-BOARD_H = SQUARE_H * ROWS
-PIECE_HEADROOM = SQUARE_W * 2 - SQUARE_H
-
-BOARD_X = SIDE_MARGIN + max(0, (BOARD_AREA_WIDTH - BOARD_W) // 2)
-# BOARD_LIFT raises the board above its centered position (bigger = higher).
-BOARD_LIFT = 80
-BOARD_Y = BOARD_AREA_TOP + PIECE_HEADROOM + max(
-    0, (BOARD_AREA_HEIGHT - PIECE_HEADROOM - BOARD_H) // 2
-) - BOARD_LIFT
-
-WIDTH = SCREEN_WIDTH
-HEIGHT = SCREEN_HEIGHT
+# SDL2 on Android resolves relative paths via context.getFilesDir() (=
+# .../files/), not the process CWD (.../files/app/), so any pygame.image.load
+# or font load with a relative path silently fails.  ANDROID_APP_PATH is set
+# by p4a to the absolute app dir; using it makes SDL2 take the fopen() path.
+_android_app = os.environ.get("ANDROID_APP_PATH", "")
+ASSET_DIR = os.path.join(_android_app, "assets") if _android_app else "assets"
+CARDS_DIR = os.path.join(_android_app, "cards") if _android_app else "cards"
 
 # -----------------------------
 # Colors
@@ -143,7 +258,7 @@ animations = []
 # UI font: m6x11 by Daniel Linssen (managore.itch.io/m6x11), the typeface
 # Balatro uses. It is designed on a 16pt pixel grid - render it at multiples
 # of 16 with antialiasing forced off so the pixels stay square and crisp.
-FONT_PATH = os.path.join("assets", "fonts", "m6x11.ttf")
+FONT_PATH = os.path.join(ASSET_DIR, "fonts", "m6x11.ttf")
 
 
 class PixelFont(pygame.font.Font):
@@ -158,16 +273,16 @@ def load_font(size, fallback_size, bold=False):
         return pygame.font.SysFont("dejavusans", fallback_size, bold=bold)
 
 
-title_font = load_font(48, 32, bold=True)
-small_font = load_font(24, 22, bold=True)
-tiny_font = load_font(20, 18)
-badge_font = load_font(20, 16, bold=True)
-menu_title_font = load_font(96, 64, bold=True)
-menu_font = load_font(32, 26, bold=True)
-home_title_font = load_font(160, 120, bold=True)  # big CHESSBYTE logo
-menu_option_font = load_font(40, 30, bold=True)   # START / CATALOG / ...
-hint_font = load_font(22, 18, bold=True)          # footer controls hint
-action_font = load_font(32, 24, bold=True)        # END TURN / DISCARD buttons
+title_font = load_font(_sc(48), _sc(32), bold=True)
+small_font = load_font(_sc(24), _sc(22), bold=True)
+tiny_font = load_font(_sc(20), _sc(18))
+badge_font = load_font(_sc(20), _sc(16), bold=True)
+menu_title_font = load_font(_sc(96), _sc(64), bold=True)
+menu_font = load_font(_sc(32), _sc(26), bold=True)
+home_title_font = load_font(_sc(160), _sc(120), bold=True)  # big CHESSBYTE logo
+menu_option_font = load_font(_sc(40), _sc(30), bold=True)   # START / CATALOG / ...
+hint_font = load_font(_sc(22), _sc(18), bold=True)          # footer controls hint
+action_font = load_font(_sc(32), _sc(24), bold=True)        # END TURN / DISCARD buttons
 
 TEXT_SHADOW_COLOR = (24, 13, 8)
 
@@ -209,9 +324,6 @@ def draw_wavy_text(font_obj, text, color, pos, amp=2, offset=2, target=None, pha
 # -----------------------------
 # Pixel-art board and pieces
 # Assets: "pixel chess" by Dani Maccari (https://dani-maccari.itch.io/)
-# -----------------------------
-ASSET_DIR = "assets"
-
 # Board color options, cycled in-game with the B key. All share the same
 # perspective geometry, so only the palette changes between them.
 BOARD_FILES = [
@@ -429,8 +541,8 @@ card_images = {
 }
 
 for card_name in CARD_NAMES:
-    card_images[WHITE][card_name] = load_card_image(os.path.join("cards", f"{card_name}_white.png"))
-    card_images[BLACK][card_name] = load_card_image(os.path.join("cards", f"{card_name}_black.png"))
+    card_images[WHITE][card_name] = load_card_image(os.path.join(CARDS_DIR, f"{card_name}_white.png"))
+    card_images[BLACK][card_name] = load_card_image(os.path.join(CARDS_DIR, f"{card_name}_black.png"))
 
 
 def initial_board():
@@ -3576,32 +3688,40 @@ def board_to_screen(row, col):
 
 
 def get_card_rects():
-    # The current player's hand, fanned in a shallow arc and centered between
-    # the side buttons. Cards overlap only if the hand is unusually large.
     rects = {}
     hand = game.hand[view_color()]
     n = len(hand)
     if n == 0:
         return rects
 
-    avail = SCREEN_WIDTH - 2 * (SIDE_MARGIN + ACTION_BTN_W + PANEL_PAD)
-    spacing = CARD_WIDTH + PANEL_PAD
-    if n > 1 and n * spacing > avail:
-        spacing = max(CARD_WIDTH // 3, (avail - CARD_WIDTH) // (n - 1))
-
-    total = CARD_WIDTH + (n - 1) * spacing
-    start_x = (SCREEN_WIDTH - total) // 2
-    # Cards hang from the bottom of the screen and the middle ones rise highest.
-    bottom = SCREEN_HEIGHT - CARD_GAP
-    center = (n - 1) / 2
-    max_off = max(1.0, center)
-
-    for index, card_name in enumerate(hand):
-        off = index - center
-        x = start_x + index * spacing
-        lift = ARC_LIFT * (1 - (off / max_off) ** 2)  # middle rises highest
-        y = int(bottom - lift - CARD_HEIGHT)
-        rects[card_name] = pygame.Rect(x, y, CARD_WIDTH, CARD_HEIGHT)
+    if IS_PORTRAIT:
+        # Grid: TRAY_COLS cards per row, rows stacked downward from CARD_GRID_TOP.
+        cols = min(TRAY_COLS, n)
+        total_w = cols * CARD_WIDTH + (cols - 1) * PANEL_PAD
+        start_x = SIDE_MARGIN + max(0, (BOARD_AREA_WIDTH - total_w) // 2)
+        for index, card_name in enumerate(hand):
+            col = index % cols
+            row = index // cols
+            x = start_x + col * (CARD_WIDTH + PANEL_PAD)
+            y = CARD_GRID_TOP + row * (CARD_HEIGHT + PANEL_PAD)
+            rects[card_name] = pygame.Rect(x, y, CARD_WIDTH, CARD_HEIGHT)
+    else:
+        # Landscape: shallow arc centred between the side buttons.
+        avail = SCREEN_WIDTH - 2 * (SIDE_MARGIN + ACTION_BTN_W + PANEL_PAD)
+        spacing = CARD_WIDTH + PANEL_PAD
+        if n > 1 and n * spacing > avail:
+            spacing = max(CARD_WIDTH // 3, (avail - CARD_WIDTH) // (n - 1))
+        total = CARD_WIDTH + (n - 1) * spacing
+        start_x = (SCREEN_WIDTH - total) // 2
+        bottom = SCREEN_HEIGHT - CARD_GAP
+        center = (n - 1) / 2
+        max_off = max(1.0, center)
+        for index, card_name in enumerate(hand):
+            off = index - center
+            x = start_x + index * spacing
+            lift = ARC_LIFT * (1 - (off / max_off) ** 2)
+            y = int(bottom - lift - CARD_HEIGHT)
+            rects[card_name] = pygame.Rect(x, y, CARD_WIDTH, CARD_HEIGHT)
 
     return rects
 
@@ -4187,11 +4307,15 @@ def draw_card_preview(owner, card_name, card_rect):
 
 
 def get_action_buttons():
-    # Discard on the left of the hand, End Turn on the right.
-    bw, bh = ACTION_BTN_W, 84
-    cy = TRAY_Y + TRAY_HEIGHT // 2
-    discard = pygame.Rect(SIDE_MARGIN, cy - bh // 2, bw, bh)
-    end_turn = pygame.Rect(SCREEN_WIDTH - SIDE_MARGIN - bw, cy - bh // 2, bw, bh)
+    bw, bh = ACTION_BTN_W, _sc(84)
+    if IS_PORTRAIT:
+        # Portrait: button strip sits between the log strip and the card grid.
+        y = BTN_STRIP_Y
+    else:
+        # Landscape: buttons flank the card arc, vertically centred in the tray.
+        y = TRAY_Y + TRAY_HEIGHT // 2 - bh // 2
+    discard  = pygame.Rect(SIDE_MARGIN, y, bw, bh)
+    end_turn = pygame.Rect(SCREEN_WIDTH - SIDE_MARGIN - bw, y, bw, bh)
     return {"discard": discard, "end_turn": end_turn}
 
 
@@ -4340,19 +4464,18 @@ def draw_ether_chip(label, amount, color, is_active, topleft):
 
 
 def draw_move_log():
-    # Running log on the right of the board: chess moves and cards played.
+    if IS_PORTRAIT:
+        _draw_move_log_portrait()
+        return
+
+    # Landscape: narrow panel to the right of the board.
     btns = get_action_buttons()
-    # Narrow panel hugging the right edge, aligned above the End Turn button.
     right = SCREEN_WIDTH - SIDE_MARGIN
-    # The board's width (and so its right edge) scales with screen size, so
-    # the log's left edge must too - a fixed pixel value here only worked at
-    # the resolution it was tuned for; at higher resolutions the board is
-    # wider and sits further right, so a fixed left edge cuts into it.
     left = max(BOARD_X + BOARD_W + 50, btns["end_turn"].left)
     top = INFO_HEIGHT + 14
     bottom = btns["end_turn"].top - 14
     if right - left < 120 or bottom - top < 90:
-        return  # not enough room beside the board
+        return
 
     panel = pygame.Rect(left, top, right - left, bottom - top)
     surf = pygame.Surface(panel.size, pygame.SRCALPHA)
@@ -4369,7 +4492,7 @@ def draw_move_log():
     max_w = panel.right - 12 - text_x
     list_top = sep_y + 8
     capacity = max(1, (panel.bottom - 10 - list_top) // line_h)
-    entries = game.move_log[-capacity:]  # newest entries, oldest first
+    entries = game.move_log[-capacity:]
 
     y = list_top
     for color, kind, text in entries:
@@ -4379,6 +4502,38 @@ def draw_move_log():
         else:
             pygame.draw.rect(screen, (40, 40, 50), swatch, border_radius=3)
             pygame.draw.rect(screen, (120, 120, 140), swatch, 1, border_radius=3)
+        text_color = GOLD if kind == "card" else (224, 224, 236)
+        draw_shadow_text(tiny_font, clip_text(tiny_font, text, max_w), text_color, (text_x, y), offset=1)
+        y += line_h
+
+
+def _draw_move_log_portrait():
+    # Portrait: horizontal strip between board bottom and button strip.
+    panel = pygame.Rect(SIDE_MARGIN, LOG_STRIP_Y,
+                        SCREEN_WIDTH - 2 * SIDE_MARGIN, LOG_STRIP_H)
+    surf = pygame.Surface(panel.size, pygame.SRCALPHA)
+    surf.fill((10, 10, 16, 185))
+    screen.blit(surf, panel)
+    pygame.draw.rect(screen, (78, 78, 98), panel, 2, border_radius=8)
+
+    draw_shadow_text(small_font, "GAME LOG", GOLD, (panel.x + 14, panel.y + 8), offset=1)
+    sep_y = panel.y + 8 + small_font.get_height() + 4
+    pygame.draw.line(screen, (78, 78, 98), (panel.x + 12, sep_y), (panel.right - 12, sep_y), 1)
+
+    line_h = tiny_font.get_height() + 4
+    text_x = panel.x + 30
+    max_w = panel.right - 16 - text_x
+    capacity = max(1, (panel.bottom - 8 - sep_y) // line_h)
+    entries = game.move_log[-capacity:]
+
+    y = sep_y + 6
+    for color, kind, text in entries:
+        swatch = pygame.Rect(panel.x + 12, y + 2, 10, 10)
+        if color == WHITE:
+            pygame.draw.rect(screen, (235, 235, 245), swatch, border_radius=2)
+        else:
+            pygame.draw.rect(screen, (40, 40, 50), swatch, border_radius=2)
+            pygame.draw.rect(screen, (120, 120, 140), swatch, 1, border_radius=2)
         text_color = GOLD if kind == "card" else (224, 224, 236)
         draw_shadow_text(tiny_font, clip_text(tiny_font, text, max_w), text_color, (text_x, y), offset=1)
         y += line_h
@@ -4851,8 +5006,19 @@ def menu_activate(action):
         running = False
 
 
+def _handle_videoresize(events):
+    """Call from every event loop to respond to device rotation."""
+    global SCREEN_WIDTH, SCREEN_HEIGHT, screen
+    for event in events:
+        if event.type == pygame.VIDEORESIZE:
+            SCREEN_WIDTH, SCREEN_HEIGHT = event.w, event.h
+            _init_layout()
+            screen = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+
+
 def handle_menu_events(events):
     global menu_selected, running
+    _handle_videoresize(events)
     items = current_menu_items()
     rects = get_menu_rects()
     mx, my = pygame.mouse.get_pos()
@@ -4875,7 +5041,7 @@ def handle_menu_events(events):
                 menu_activate("catalog")
             elif event.key == pygame.K_s:
                 menu_activate("settings")
-            elif event.key in (pygame.K_q, pygame.K_ESCAPE):
+            elif event.key in (pygame.K_q, pygame.K_ESCAPE, pygame.K_AC_BACK):
                 menu_activate("exit")
         elif event.type == pygame.MOUSEBUTTONDOWN:
             for i, r in enumerate(rects):
@@ -4885,10 +5051,11 @@ def handle_menu_events(events):
 
 def handle_catalog_events(events):
     global running
+    _handle_videoresize(events)
     for event in events:
         if event.type == pygame.QUIT:
             running = False
-        elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+        elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE, pygame.K_AC_BACK):
             request_transition("menu")
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # Click a card row to tick it in or out of the game.
@@ -4906,11 +5073,12 @@ def handle_settings_events(events):
     global running, music_muted, white_skin_index, black_skin_index
     global current_board_index, BOARD_IMAGE, BOARD_IMAGE_OX, BOARD_IMAGE_OY, LIGHT_SQUARE, DARK_SQUARE
     global difficulty, human_color
+    _handle_videoresize(events)
     for event in events:
         if event.type == pygame.QUIT:
             running = False
         elif event.type == pygame.KEYDOWN:
-            if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+            if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE, pygame.K_AC_BACK):
                 request_transition("menu")
                 continue
             elif event.key == pygame.K_m and _audio_ok:
@@ -5028,7 +5196,7 @@ def handle_modeselect_events(events):
         if event.type == pygame.QUIT:
             running = False
         elif event.type == pygame.KEYDOWN:
-            if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE):
+            if event.key in (pygame.K_ESCAPE, pygame.K_BACKSPACE, pygame.K_AC_BACK):
                 request_transition("menu")
             elif event.key == pygame.K_UP:
                 modeselect_selected = (modeselect_selected - 1) % len(MODE_ITEMS)
@@ -5437,13 +5605,14 @@ def draw_lobby_screen():
 
 def handle_lobby_events(events):
     global running, net_join_text
+    _handle_videoresize(events)
     joiner_input = (net_local_color == BLACK and (net is None or net.error is not None))
     for event in events:
         if event.type == pygame.QUIT:
             net_leave()
             running = False
         elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE:
+            if event.key in (pygame.K_ESCAPE, pygame.K_AC_BACK):
                 net_leave()
                 request_transition("menu")
             elif joiner_input:
@@ -5560,6 +5729,11 @@ while running:
         if event.type == pygame.QUIT:
             running = False
             continue
+        if event.type == pygame.VIDEORESIZE:
+            SCREEN_WIDTH, SCREEN_HEIGHT = event.w, event.h
+            _init_layout()
+            screen = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+            continue
         if blocked:
             continue  # ignore input mid-fade (events still pumped)
 
@@ -5570,7 +5744,7 @@ while running:
             continue
 
         if human_locked:
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            if event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_AC_BACK):
                 if game_mode == "online":
                     net_leave()
                 elif game_mode in ("pvp", "pvc") and not game.game_over:
@@ -5579,7 +5753,7 @@ while running:
             continue
 
         if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE:
+            if event.key in (pygame.K_ESCAPE, pygame.K_AC_BACK):
                 if game_mode == "online":
                     net_leave()
                 elif game_mode in ("pvp", "pvc") and not game.game_over:

@@ -15,7 +15,14 @@ import pygame
 
 from carddata import ALL_TRAY_CARDS
 
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd()
+# On Android (python-for-android), the app's source directory isn't a safe
+# place to write: ANDROID_PRIVATE is the app's actual writable private
+# storage, set by the p4a bootstrap before main.py ever runs. Everywhere
+# else, writing next to the script (alongside the desktop install) is fine.
+_BASE_DIR = (
+    os.environ.get("ANDROID_PRIVATE")
+    or (os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else os.getcwd())
+)
 CONFIG_PATH = os.path.join(_BASE_DIR, "config.json")
 SAVE_PATH = os.path.join(_BASE_DIR, "savegame.pkl")
 
