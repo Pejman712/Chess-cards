@@ -152,24 +152,20 @@ def _init_layout():
     INFO_Y        = 0
 
     if IS_PORTRAIT:
-        # Two-row card grid; log strip + button strip sit between board and cards.
-        # Card height scales off screen width (the short dimension) so cards are
-        # the same physical size regardless of how tall the phone is.
-        CARD_HEIGHT  = int(SCREEN_WIDTH * 0.30)
+        # Fan card layout: one overlapping fan of cards above a 3-button strip.
+        CARD_HEIGHT  = int(SCREEN_WIDTH * 0.42)
         CARD_WIDTH   = int(CARD_HEIGHT / CARD_ASPECT)
-        TRAY_COLS    = max(1, (SCREEN_WIDTH - 2 * SIDE_MARGIN) // (CARD_WIDTH + PANEL_PAD))
-        TRAY_ROWS    = 2
+        TRAY_COLS    = 5
+        TRAY_ROWS    = 1
         BTN_H        = sc(80)
-        LOG_STRIP_H  = sc(100)
-        ACTION_BTN_W = int((SCREEN_WIDTH - 2 * SIDE_MARGIN - PANEL_PAD) // 2)
+        LOG_STRIP_H  = 0
+        ACTION_BTN_W = int((SCREEN_WIDTH - 2 * SIDE_MARGIN - 2 * PANEL_PAD) // 3)
         ARC_LIFT     = 0
-        card_grid_h  = CARD_HEIGHT * TRAY_ROWS + PANEL_PAD
-        # TRAY_Y marks the top of everything below the board (log + btns + cards)
-        HAND_RESERVE = card_grid_h + BTN_H + LOG_STRIP_H + PANEL_PAD * 5
+        HAND_RESERVE = CARD_HEIGHT + BTN_H + PANEL_PAD * 4
         TRAY_Y       = SCREEN_HEIGHT - HAND_RESERVE
-        LOG_STRIP_Y  = TRAY_Y + PANEL_PAD
-        BTN_STRIP_Y  = LOG_STRIP_Y + LOG_STRIP_H + PANEL_PAD
-        CARD_GRID_TOP = BTN_STRIP_Y + BTN_H + PANEL_PAD
+        LOG_STRIP_Y  = 0
+        BTN_STRIP_Y  = TRAY_Y + CARD_HEIGHT + PANEL_PAD * 2
+        CARD_GRID_TOP = TRAY_Y + PANEL_PAD
         BOARD_SCALE  = 0.95
     else:
         # Landscape: single arc row of cards; log floats to the right of board.
@@ -315,7 +311,7 @@ def draw_wavy_text(font_obj, text, color, pos, amp=2, offset=2, target=None, pha
     x, y = pos
 
     for i, ch in enumerate(text):
-        dy = round(math.sin(ticks * 0.006 + i * 0.55 + phase) * amp)
+        dy = round(math.sin(ticks * 0.010 + i * 0.55 + phase) * amp)
         target.blit(get_glyph(font_obj, ch, TEXT_SHADOW_COLOR), (x + offset, y + dy + offset))
         glyph = get_glyph(font_obj, ch, color)
         target.blit(glyph, (x, y + dy))
@@ -522,11 +518,16 @@ def get_scaled_card_image(owner, card_name, width, height):
 
         if image is None:
             _scaled_card_cache[key] = None
-        elif (width, height) == image.get_size():
-            # Cards are displayed at the art's native size - no resampling.
-            _scaled_card_cache[key] = image
         else:
-            _scaled_card_cache[key] = pygame.transform.smoothscale(image, (width, height))
+            if (width, height) == image.get_size():
+                scaled = image.copy()
+            else:
+                scaled = pygame.transform.smoothscale(image, (width, height))
+            # Cover the cost number baked into the top-right corner of the artwork.
+            cover_w = max(4, width // 5)
+            cover_h = max(4, height // 9)
+            pygame.draw.rect(scaled, (8, 5, 12), (width - cover_w, 0, cover_w, cover_h))
+            _scaled_card_cache[key] = scaled
 
     return _scaled_card_cache[key]
 
@@ -564,17 +565,20 @@ def board_center(row, col):
     return (x + SQUARE_W // 2, y + SQUARE_H // 2)
 
 
+ANIM_SPEED = 3  # divide all animation frame counts by this; increase to go faster
+
 def add_animation(kind, squares=None, text="", color=(255, 220, 120), frames=30, extra=None):
     if squares is None:
         squares = []
 
+    fast_frames = max(3, frames // ANIM_SPEED)
     animations.append({
         "kind": kind,
         "squares": list(squares),
         "text": text,
         "color": color,
-        "frames": frames,
-        "max_frames": frames,
+        "frames": fast_frames,
+        "max_frames": fast_frames,
         "extra": extra or {},
     })
 
@@ -596,9 +600,9 @@ def _hand_center_pos():
 
 def spawn_draw_fly(target, index, card_name):
     # A face-down card flies from the deck pile into its hand slot, staggered.
-    add_animation("card_fly", frames=16, extra={
+    add_animation("card_fly", frames=8, extra={
         "from": _deck_pile_pos(), "to": target,
-        "owner": None, "card": None, "reveal": card_name, "delay": index * 4,
+        "owner": None, "card": None, "reveal": card_name, "delay": index * 2,
     })
 
 
@@ -619,7 +623,7 @@ def animate_initial_hand():
 
 def spawn_discard_fly(from_center, owner, card_name):
     # The played/discarded card flies from its hand slot to the discard pile.
-    add_animation("card_fly", frames=15, extra={
+    add_animation("card_fly", frames=7, extra={
         "from": from_center, "to": _discard_pile_pos(),
         "owner": owner, "card": card_name, "delay": 0,
     })
@@ -627,7 +631,7 @@ def spawn_discard_fly(from_center, owner, card_name):
 
 # A handful of faint card images drift across the background with random
 # position, velocity, rotation and spin.
-FLOATING_CARD_COUNT = 30
+FLOATING_CARD_COUNT = 20
 FLOATING_CARD_ALPHA = 200
 _floating_cards = []
 _last_float_ticks = [0]
@@ -639,7 +643,7 @@ def init_floating_cards():
     # FLOATING_CARD_COUNT of them) grows quadratically with resolution, which
     # is what made this decorative layer disproportionately expensive in
     # fullscreen at 1440p/4K.
-    card_w = int(min(SCREEN_HEIGHT, 1080) * 0.13)
+    card_w = int(min(SCREEN_HEIGHT, 1080) * 0.22)
     card_h = int(card_w * CARD_ASPECT)
     names = [c for c in ALL_TRAY_CARDS if card_images[WHITE].get(c) is not None]
     if not names:
@@ -656,6 +660,8 @@ def init_floating_cards():
         name = random.choice(names)
         owner = random.choice((WHITE, BLACK))
         base = pygame.transform.smoothscale(card_images[owner][name], (card_w, card_h)).convert_alpha()
+        # Cover the baked cost number in the top-right corner.
+        pygame.draw.rect(base, (8, 5, 12), (card_w - card_w // 5, 0, card_w // 5, card_h // 9))
         # Bake the faint alpha in so rotation keeps it subtle.
         base.fill((255, 255, 255, FLOATING_CARD_ALPHA), special_flags=pygame.BLEND_RGBA_MULT)
 
@@ -680,7 +686,7 @@ def init_floating_cards():
 # Snap rotation to a fine step and cache the rotated frame. The step is small
 # enough that the spin looks continuous, but it still avoids a re-rotate on
 # frames where the angle barely moved (and for nearly-still cards).
-FLOAT_ANGLE_STEP = 0.5
+FLOAT_ANGLE_STEP = 3.0
 
 
 def draw_floating_cards():
@@ -725,14 +731,8 @@ BG_DIM.fill((0, 0, 0, 120))  # gameplay backdrop dim; board/pieces/cards draw on
 
 
 def draw_background():
-    if BACKGROUND_IMAGE is not None:
-        screen.blit(BACKGROUND_IMAGE, (0, 0))
-    else:
-        screen.fill((0, 0, 0))
-
+    screen.fill((0, 0, 0))
     draw_floating_cards()
-    # Darken the backdrop so the board and hand (drawn afterwards) stand out.
-    screen.blit(BG_DIM, (0, 0))
 
 
 def draw_animations():
@@ -3695,16 +3695,17 @@ def get_card_rects():
         return rects
 
     if IS_PORTRAIT:
-        # Grid: TRAY_COLS cards per row, rows stacked downward from CARD_GRID_TOP.
-        cols = min(TRAY_COLS, n)
-        total_w = cols * CARD_WIDTH + (cols - 1) * PANEL_PAD
-        start_x = SIDE_MARGIN + max(0, (BOARD_AREA_WIDTH - total_w) // 2)
+        # Fan: cards overlap horizontally with each card slightly rotated.
+        fan_spacing = max(CARD_WIDTH // 2, (SCREEN_WIDTH - 2 * SIDE_MARGIN - CARD_WIDTH) // max(n - 1, 1))
+        fan_spacing = min(fan_spacing, int(CARD_WIDTH * 0.58))
+        total_w = fan_spacing * (n - 1) + CARD_WIDTH
+        start_x = (SCREEN_WIDTH - total_w) // 2
+        center = (n - 1) / 2
         for index, card_name in enumerate(hand):
-            col = index % cols
-            row = index // cols
-            x = start_x + col * (CARD_WIDTH + PANEL_PAD)
-            y = CARD_GRID_TOP + row * (CARD_HEIGHT + PANEL_PAD)
-            rects[card_name] = pygame.Rect(x, y, CARD_WIDTH, CARD_HEIGHT)
+            x = start_x + index * fan_spacing
+            angle = (index - center) * (8 / max(n - 1, 1)) * 2
+            _card_fan_angles[card_name] = angle
+            rects[card_name] = pygame.Rect(x, CARD_GRID_TOP, CARD_WIDTH, CARD_HEIGHT)
     else:
         # Landscape: shallow arc centred between the side buttons.
         avail = SCREEN_WIDTH - 2 * (SIDE_MARGIN + ACTION_BTN_W + PANEL_PAD)
@@ -3984,7 +3985,7 @@ def draw_pieces():
         # Gentle idle bob (lift only, so pieces never sink into the board).
         # Per-square phase keeps the pieces from moving in lockstep.
         phase = (row * 3 + col * 5) * 0.6
-        lift = (math.sin(ticks / 350.0 + phase) + 1) / 2
+        lift = (math.sin(ticks / 150.0 + phase) + 1) / 2
         bob = round(lift * max(2, SQUARE_SIZE // 20))
         render_list.append((y, x, row, col, piece, bob))
 
@@ -4050,13 +4051,16 @@ def get_card_face(owner, card_name, size, used, affordable):
     strip.fill((12, 9, 6, 205))
     card_surface.blit(strip, (0, height - strip_h))
 
-    # Cost chip in the top-right corner; gold when affordable, gray when not.
-    chip_text = badge_font.render(str(cost), True, (25, 18, 8))
-    chip_w = chip_text.get_width() + 10
-    chip_h = chip_text.get_height() + 4
-    chip = pygame.Rect(width - chip_w - 4, 4, chip_w, chip_h)
-    pygame.draw.rect(card_surface, GOLD if affordable else (130, 125, 110), chip, border_radius=8)
-    card_surface.blit(chip_text, chip_text.get_rect(center=chip.center))
+    # Dim unaffordable cards heavily; draw a bright border on affordable ones.
+    if not affordable:
+        dim_overlay = pygame.Surface(size, pygame.SRCALPHA)
+        dim_overlay.fill((0, 0, 0, 210))
+        card_surface.blit(dim_overlay, (0, 0))
+    else:
+        # Bright gold border so it pops on both light and dark card art.
+        pygame.draw.rect(card_surface, (255, 225, 80), card_surface.get_rect(), 4, border_radius=8)
+        inner = card_surface.get_rect().inflate(-8, -8)
+        pygame.draw.rect(card_surface, (255, 255, 200, 60), inner, 2, border_radius=6)
 
     if used:
         overlay = pygame.Surface(size, pygame.SRCALPHA)
@@ -4066,8 +4070,7 @@ def get_card_face(owner, card_name, size, used, affordable):
         used_surface = badge_font.render("USED", True, TEXT_COLOR)
         card_surface.blit(used_surface, used_surface.get_rect(center=(width // 2, height // 2 - 10)))
 
-        buy_surface = badge_font.render(f"Refill: {cost}", True, GOLD if affordable else MUTED_TEXT)
-        card_surface.blit(buy_surface, buy_surface.get_rect(center=(width // 2, height // 2 + 10)))
+        pass
 
     _card_face_cache[key] = card_surface
     return card_surface
@@ -4076,7 +4079,7 @@ def get_card_face(owner, card_name, size, used, affordable):
 def get_card_bob(card_name):
     # Idle float for the whole card; the name's wave rides on top of it.
     phase = sum(map(ord, card_name)) % 10
-    return round(math.sin(pygame.time.get_ticks() * 0.002 + phase) * 3)
+    return round(math.sin(pygame.time.get_ticks() * 0.004 + phase) * 3)
 
 
 # How high a card rises and how strongly it dims when not hovered. The eased
@@ -4085,9 +4088,12 @@ def get_card_bob(card_name):
 CARD_HOVER_LIFT = int(CARD_HEIGHT * 0.09)
 CARD_REST_DIM = 45  # alpha of the shade laid over a fully-rested card
 _card_hover_anim = {}
+_card_fan_angles = {}   # card_name -> fan rotation angle in degrees (portrait only)
+_game_log_open = False  # toggle for the full-screen game log overlay (portrait)
+_rotated_card_cache = {}  # (card_name, angle, affordable, discard, dim_bucket, size) -> rotated surface
 
 
-def draw_single_card(rect, owner, card_name, hover=1.0, lift=0):
+def draw_single_card(rect, owner, card_name, hover=1.0, lift=0, angle=0):
     # Cards in hand are always playable (no "used" state in the deck system).
     used = False
     display_name, accent, _ = CARD_INFO.get(card_name, (card_name, (70, 70, 70), ""))
@@ -4095,9 +4101,40 @@ def draw_single_card(rect, owner, card_name, hover=1.0, lift=0):
 
     rect = rect.move(0, get_card_bob(card_name) - lift)
 
-    # A halo in the card's general color sits behind it, faint at rest and
-    # blooming as the card lifts on hover. Lighten the accent so it reads as a
-    # glow rather than a dark plate.
+    if angle != 0:
+        # Rotated fan card: pre-render and cache the rotated surface so we only
+        # call rotozoom when something actually changes (angle, affordability, etc.).
+        dim = round(CARD_REST_DIM * (1 - hover))
+        discard = card_name in game.discard_marks
+        cache_key = (card_name, round(angle, 1), affordable, discard, dim // 15, rect.size)
+        if cache_key not in _rotated_card_cache:
+            cw, ch = rect.size
+            card_surf = pygame.Surface((cw, ch), pygame.SRCALPHA)
+            card_surf.blit(get_card_face(owner, card_name, rect.size, used, affordable), (0, 0))
+            if discard:
+                mark = pygame.Surface((cw, ch), pygame.SRCALPHA)
+                mark.fill((180, 30, 30, 90))
+                card_surf.blit(mark, (0, 0))
+                pygame.draw.rect(card_surf, (240, 80, 80), card_surf.get_rect(), 3, border_radius=8)
+            strip_h = max(18, ch // 8)
+            name_text = clip_text(badge_font, display_name, cw - 6)
+            name_surf = badge_font.render(name_text, True, PARCHMENT)
+            name_x = (cw - name_surf.get_width()) // 2
+            name_y = ch - strip_h // 2 - name_surf.get_height() // 2
+            card_surf.blit(name_surf, (name_x, name_y))
+            border_color = CARD_DISABLED if used else CARD_BORDER
+            pygame.draw.rect(card_surf, border_color, card_surf.get_rect(), 2, border_radius=8)
+            if dim > 0:
+                shade = pygame.Surface((cw, ch), pygame.SRCALPHA)
+                pygame.draw.rect(shade, (0, 0, 0, dim), shade.get_rect(), border_radius=8)
+                card_surf.blit(shade, (0, 0))
+            _rotated_card_cache[cache_key] = pygame.transform.rotozoom(card_surf, -angle, 1.0)
+        rotated = _rotated_card_cache[cache_key]
+        screen.blit(rotated, rotated.get_rect(center=rect.center))
+        return
+
+    # angle == 0: draw directly to screen (no intermediate surface needed).
+    # Halo glow behind the card.
     glow_color = tuple(min(255, c + 100) for c in accent)
     base = max(2, int(CARD_WIDTH * 0.03))
     for i in range(3):
@@ -4109,7 +4146,6 @@ def draw_single_card(rect, owner, card_name, hover=1.0, lift=0):
 
     screen.blit(get_card_face(owner, card_name, rect.size, used, affordable), rect)
 
-    # Dim and red-mark cards selected for discard.
     if card_name in game.discard_marks:
         mark = pygame.Surface(rect.size, pygame.SRCALPHA)
         mark.fill((180, 30, 30, 90))
@@ -4120,20 +4156,12 @@ def draw_single_card(rect, owner, card_name, hover=1.0, lift=0):
     name_text = clip_text(badge_font, display_name, rect.width - 6)
     name_x = rect.x + (rect.width - badge_font.size(name_text)[0]) // 2
     name_y = rect.y + rect.height - strip_h // 2 - badge_font.get_height() // 2
-    draw_wavy_text(
-        badge_font,
-        name_text,
-        PARCHMENT,
-        (name_x, name_y),
-        amp=1,
-        offset=1,
-        phase=sum(map(ord, card_name)) % 10,
-    )
+    draw_wavy_text(badge_font, name_text, PARCHMENT, (name_x, name_y),
+                   amp=1, offset=1, phase=sum(map(ord, card_name)) % 10)
 
     border_color = CARD_DISABLED if used else CARD_BORDER
     pygame.draw.rect(screen, border_color, rect, 2, border_radius=8)
 
-    # Rested cards sit a little dim; they brighten as the cursor lands on them.
     dim = round(CARD_REST_DIM * (1 - hover))
     if dim > 0:
         shade = pygame.Surface(rect.size, pygame.SRCALPHA)
@@ -4295,11 +4323,7 @@ def draw_card_preview(owner, card_name, card_rect):
     name_surface = small_font.render(display_name, True, PARCHMENT)
     screen.blit(name_surface, (text_x, text_y))
 
-    cost_label = f"Refill: {cost} Ether" if used else f"Cost: {cost} Ether"
-    cost_surface = tiny_font.render(cost_label, True, GOLD)
-    screen.blit(cost_surface, (text_x, text_y + 24))
-
-    line_y = text_y + 44
+    line_y = text_y + 20
     for line in wrap_text(description, tiny_font, preview_w)[:2]:
         line_surface = tiny_font.render(line, True, TEXT_COLOR)
         screen.blit(line_surface, (text_x, line_y))
@@ -4309,21 +4333,35 @@ def draw_card_preview(owner, card_name, card_rect):
 def get_action_buttons():
     bw, bh = ACTION_BTN_W, _sc(84)
     if IS_PORTRAIT:
-        # Portrait: button strip sits between the log strip and the card grid.
         y = BTN_STRIP_Y
+        discard  = pygame.Rect(SIDE_MARGIN, y, bw, bh)
+        game_log = pygame.Rect(SIDE_MARGIN + bw + PANEL_PAD, y, bw, bh)
+        end_turn = pygame.Rect(SIDE_MARGIN + 2 * (bw + PANEL_PAD), y, bw, bh)
+        return {"discard": discard, "game_log": game_log, "end_turn": end_turn}
     else:
         # Landscape: buttons flank the card arc, vertically centred in the tray.
         y = TRAY_Y + TRAY_HEIGHT // 2 - bh // 2
-    discard  = pygame.Rect(SIDE_MARGIN, y, bw, bh)
-    end_turn = pygame.Rect(SCREEN_WIDTH - SIDE_MARGIN - bw, y, bw, bh)
-    return {"discard": discard, "end_turn": end_turn}
+        discard  = pygame.Rect(SIDE_MARGIN, y, bw, bh)
+        end_turn = pygame.Rect(SCREEN_WIDTH - SIDE_MARGIN - bw, y, bw, bh)
+        return {"discard": discard, "end_turn": end_turn}
 
 
 def draw_sidebar():
-    # The hand sits directly on the game background - no tray panel behind it,
-    # and the cards are large enough to overlap the board's lower edge.
+    if IS_PORTRAIT:
+        # Dark neon bottom panel
+        panel_rect = pygame.Rect(0, TRAY_Y, SCREEN_WIDTH, SCREEN_HEIGHT - TRAY_Y)
+        panel_surf = pygame.Surface(panel_rect.size, pygame.SRCALPHA)
+        panel_surf.fill((8, 6, 18, 235))
+        screen.blit(panel_surf, panel_rect)
+        # Neon cyan glow along the top edge
+        glow_col = (0, 210, 195)
+        pygame.draw.line(screen, glow_col, (0, TRAY_Y), (SCREEN_WIDTH, TRAY_Y), 2)
+        for gi in range(1, 7):
+            ga = max(0, 170 - gi * 26)
+            gs = pygame.Surface((SCREEN_WIDTH, 1), pygame.SRCALPHA)
+            gs.fill((*glow_col, ga))
+            screen.blit(gs, (0, TRAY_Y + gi))
 
-    # Discard (left) and End Turn (right) buttons, with status counts below.
     discards_left = game.MAX_DISCARDS - game.discards_used[view_color()]
     buttons = get_action_buttons()
     mouse_pos = pygame.mouse.get_pos()
@@ -4331,12 +4369,19 @@ def draw_sidebar():
         dragging_card is not None
         and buttons["discard"].collidepoint(mouse_pos)
     )
+
+    # Status text for the game-log center button (portrait only).
+    status_preview = clip_text(tiny_font, game.status_message, buttons.get("game_log", buttons["discard"]).width - 8) if IS_PORTRAIT else ""
+
     meta = {
         "discard": ("DISCARD",
                     (235, 45, 45) if dragging_to_discard else (200, 70, 70),
                     f"{discards_left} left"),
         "end_turn": ("END TURN", (90, 200, 120), f"Deck {len(game.deck[view_color()])}"),
     }
+    if IS_PORTRAIT:
+        meta["game_log"] = ("GAME LOG ►", (85, 155, 215), status_preview)
+
     for key, brect in buttons.items():
         label, color, sub = meta[key]
         hot = brect.collidepoint(mouse_pos)
@@ -4350,39 +4395,42 @@ def draw_sidebar():
         draw_shadow_text(tiny_font, sub, MUTED_TEXT, (sx, brect.bottom + 4), offset=1)
 
     card_rects = get_card_rects()
-    mouse_pos = pygame.mouse.get_pos()
-    flight = cards_in_flight()  # cards still flying in from the deck stay hidden
+    flight = cards_in_flight()
 
-    # The card under the cursor (topmost wins, since later cards draw on top).
+    # The card under the cursor: in portrait fan, check right-to-left so the
+    # topmost (rightmost) card wins; in landscape use the standard left-to-right
+    # last-match order which already gives the correct result.
     hovered = None
     if dragging_card is None:
-        for card_name, rect in card_rects.items():
+        items = list(card_rects.items())
+        if IS_PORTRAIT:
+            items = list(reversed(items))
+        for card_name, rect in items:
             if card_name not in flight and rect.collidepoint(mouse_pos):
                 hovered = card_name
+                break
 
-    # Ease each card's hover amount toward its target so the lift and glow
-    # animate in and out instead of snapping. Drop stale entries.
     for card_name in [c for c in _card_hover_anim if c not in card_rects]:
         del _card_hover_anim[card_name]
     for card_name in card_rects:
         target = 1.0 if card_name == hovered else 0.0
         cur = _card_hover_anim.get(card_name, 0.0)
-        cur += (target - cur) * 0.25
-        _card_hover_anim[card_name] = target if abs(cur - target) < 0.01 else cur
+        cur += (target - cur) * 0.45
+        _card_hover_anim[card_name] = target if abs(cur - target) < 0.02 else cur
 
-    # Resting cards first; the hovered card is redrawn lifted on top.
+    # Resting cards first (back to front); hovered redrawn on top.
     for card_name, rect in card_rects.items():
         if dragging_card == card_name or card_name in flight or card_name == hovered:
             continue
         h = _card_hover_anim.get(card_name, 0.0)
-        draw_single_card(rect, view_color(), card_name, hover=h, lift=round(CARD_HOVER_LIFT * h))
+        angle = _card_fan_angles.get(card_name, 0) if IS_PORTRAIT else 0
+        draw_single_card(rect, view_color(), card_name, hover=h,
+                         lift=round(CARD_HOVER_LIFT * h), angle=angle)
 
-    # Redraw the hovered card on top (cards can overlap), outline it, and float
-    # a large readable preview above it.
     if hovered is not None and dragging_card is None:
         h = _card_hover_anim.get(hovered, 1.0)
         lift = round(CARD_HOVER_LIFT * h)
-        draw_single_card(card_rects[hovered], view_color(), hovered, hover=h, lift=lift)
+        draw_single_card(card_rects[hovered], view_color(), hovered, hover=h, lift=lift, angle=0)
         outline = card_rects[hovered].move(0, get_card_bob(hovered) - lift).inflate(6, 6)
         pygame.draw.rect(screen, (255, 220, 110), outline, 3, border_radius=10)
         draw_card_preview(view_color(), hovered, card_rects[hovered])
@@ -4414,7 +4462,7 @@ def draw_dragging_piece():
 
     # Shortly after pickup the piece eases from its square to the cursor
     # instead of teleporting.
-    t = min(1.0, (pygame.time.get_ticks() - dragging_lift_ticks) / 130.0)
+    t = min(1.0, (pygame.time.get_ticks() - dragging_lift_ticks) / 50.0)
     t = 1 - (1 - t) ** 2
     target = (mouse_pos[0], mouse_pos[1] + SQUARE_H // 2)
     base_x = int(dragging_lift_from[0] + (target[0] - dragging_lift_from[0]) * t)
@@ -4465,7 +4513,8 @@ def draw_ether_chip(label, amount, color, is_active, topleft):
 
 def draw_move_log():
     if IS_PORTRAIT:
-        _draw_move_log_portrait()
+        if _game_log_open:
+            _draw_move_log_portrait()
         return
 
     # Landscape: narrow panel to the right of the board.
@@ -4508,32 +4557,37 @@ def draw_move_log():
 
 
 def _draw_move_log_portrait():
-    # Portrait: horizontal strip between board bottom and button strip.
-    panel = pygame.Rect(SIDE_MARGIN, LOG_STRIP_Y,
-                        SCREEN_WIDTH - 2 * SIDE_MARGIN, LOG_STRIP_H)
-    surf = pygame.Surface(panel.size, pygame.SRCALPHA)
-    surf.fill((10, 10, 16, 185))
-    screen.blit(surf, panel)
-    pygame.draw.rect(screen, (78, 78, 98), panel, 2, border_radius=8)
+    # Full-screen overlay when the GAME LOG button is toggled in portrait.
+    overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, 195))
+    screen.blit(overlay, (0, 0))
 
-    draw_shadow_text(small_font, "GAME LOG", GOLD, (panel.x + 14, panel.y + 8), offset=1)
-    sep_y = panel.y + 8 + small_font.get_height() + 4
+    panel = pygame.Rect(SIDE_MARGIN, SIDE_MARGIN * 3,
+                        SCREEN_WIDTH - 2 * SIDE_MARGIN,
+                        SCREEN_HEIGHT - SIDE_MARGIN * 6)
+    pygame.draw.rect(screen, (12, 10, 22), panel, border_radius=16)
+    pygame.draw.rect(screen, GOLD, panel, 2, border_radius=16)
+
+    draw_shadow_text(small_font, "GAME LOG", GOLD, (panel.x + 18, panel.y + 14), offset=1)
+    tap_hint = tiny_font.render("tap anywhere to close", True, MUTED_TEXT)
+    screen.blit(tap_hint, (panel.right - tap_hint.get_width() - 12, panel.y + 18))
+    sep_y = panel.y + 14 + small_font.get_height() + 8
     pygame.draw.line(screen, (78, 78, 98), (panel.x + 12, sep_y), (panel.right - 12, sep_y), 1)
 
-    line_h = tiny_font.get_height() + 4
-    text_x = panel.x + 30
+    line_h = tiny_font.get_height() + 8
+    text_x = panel.x + 34
     max_w = panel.right - 16 - text_x
-    capacity = max(1, (panel.bottom - 8 - sep_y) // line_h)
+    capacity = max(1, (panel.bottom - 16 - sep_y) // line_h)
     entries = game.move_log[-capacity:]
 
-    y = sep_y + 6
+    y = sep_y + 10
     for color, kind, text in entries:
-        swatch = pygame.Rect(panel.x + 12, y + 2, 10, 10)
+        swatch = pygame.Rect(panel.x + 14, y + 3, 12, 12)
         if color == WHITE:
-            pygame.draw.rect(screen, (235, 235, 245), swatch, border_radius=2)
+            pygame.draw.rect(screen, (235, 235, 245), swatch, border_radius=3)
         else:
-            pygame.draw.rect(screen, (40, 40, 50), swatch, border_radius=2)
-            pygame.draw.rect(screen, (120, 120, 140), swatch, 1, border_radius=2)
+            pygame.draw.rect(screen, (40, 40, 50), swatch, border_radius=3)
+            pygame.draw.rect(screen, (120, 120, 140), swatch, 1, border_radius=3)
         text_color = GOLD if kind == "card" else (224, 224, 236)
         draw_shadow_text(tiny_font, clip_text(tiny_font, text, max_w), text_color, (text_x, y), offset=1)
         y += line_h
@@ -4563,7 +4617,7 @@ def draw_info_panel():
     if game.winner_message is not None:
         headline = f"GAME OVER - {game.winner_message}"
     else:
-        headline = f"{game.turn.capitalize()} to move"
+        headline = f"{game.turn.upper()} TO MOVE"
 
     x = bar.x + 16
     draw_wavy_text(title_font, clip_text(title_font, headline, text_w), GOLD, (x, bar.y + 8), amp=2, offset=3)
@@ -4581,7 +4635,8 @@ def draw_info_panel():
 
     # One status line that fits the thin bar: prefer the latest message, else
     # the active-card hint, else any running effects.
-    if game.status_message and game.status_message != headline:
+    _plain_turn = f"{game.turn.capitalize()} to move"
+    if game.status_message and game.status_message not in (headline, _plain_turn):
         status_line, status_color = game.status_message, TEXT_COLOR
     elif active_flags:
         status_line, status_color = "Active effects: " + ", ".join(active_flags), GOLD
@@ -4652,7 +4707,7 @@ _last_saved_turn = None  # auto-save the local game whenever the turn changes
 
 # Smooth fade-to-black transition between screens. progress runs 0 -> 1; the
 # screen switches at the half-way point (fully black), so it fades out then in.
-TRANSITION_STEP = 0.6
+TRANSITION_STEP = 1.5
 _transition = {"active": False, "progress": 0.0, "target": None, "switched": False, "on_switch": None}
 
 
@@ -4690,6 +4745,8 @@ def draw_transition_overlay():
 
 def start_new_game():
     global game, dragging_card, dragging_piece
+    _card_face_cache.clear()
+    _rotated_card_cache.clear()
     game = GameState()
     dragging_card = None
     dragging_piece = None
@@ -5808,10 +5865,15 @@ while running:
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
             mouse_pos = event.pos
+
+            # Close the game log overlay on any tap (portrait only).
+            if _game_log_open:
+                _game_log_open = False
+                continue
+
             card_rects = get_card_rects()
 
-            # End Turn / Discard buttons. Discarding is done by dragging a card
-            # onto the Discard button, so a bare click just explains how.
+            # End Turn / Discard / Game Log buttons.
             buttons = get_action_buttons()
             if buttons["end_turn"].collidepoint(mouse_pos):
                 game.end_turn()
@@ -5822,6 +5884,9 @@ while running:
                     game.status_message = f"Drag a card onto Discard to throw it away ({left} left)."
                 else:
                     game.status_message = f"No discards left (limit {game.MAX_DISCARDS})."
+                continue
+            if IS_PORTRAIT and buttons.get("game_log") and buttons["game_log"].collidepoint(mouse_pos):
+                _game_log_open = True
                 continue
 
             # Pick up a card. Every card can be dragged: onto one of your pieces

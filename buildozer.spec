@@ -40,7 +40,7 @@ android.permissions = INTERNET,ACCESS_NETWORK_STATE,ACCESS_WIFI_STATE
 
 android.api = 33
 android.minapi = 21
-android.archs = arm64-v8a
+android.archs = arm64-v8a, x86_64
 
 # Pin python-for-android to its last release that defaults hostpython3/
 # python3 to Python 3.11 (v2026.05.09 jumped straight to 3.14, with no
